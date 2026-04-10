@@ -1,0 +1,2 @@
+# ReddiHelp
+Emergency Coordination Platform
