@@ -3,7 +3,7 @@ import { io } from 'socket.io-client'
 import { useSocketStore } from '../stores/socketStore'
 import { useAuthStore } from '../stores/authStore'
 
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:3000'
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL
 
 export function useSocket() {
   const { socket, setSocket, setConnected } = useSocketStore()
