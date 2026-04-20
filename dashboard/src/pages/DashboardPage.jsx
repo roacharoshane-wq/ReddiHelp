@@ -1,12 +1,10 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../api/client'
-import { useAuthStore } from '../stores/authStore'
 import { Clock, Loader, CheckCircle, Activity, CircleAlert, X } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 
 export default function DashboardPage() {
-  const user = useAuthStore((s) => s.user)
   const navigate = useNavigate()
   const [expandedKpi, setExpandedKpi] = useState(null)
 
@@ -49,14 +47,14 @@ export default function DashboardPage() {
   const expandedIncidents = expandedData ? incidents.filter(expandedData.filter) : []
 
   return (
-    <div className="p-6 space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="p-4 sm:p-6 space-y-5 sm:space-y-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Welcome back, ReddiBoss</h1>
+          <h1 className="text-xl sm:text-2xl font-bold">Welcome back, ReddiBoss</h1>
           <p className="text-sm text-gray-500 dark:text-gray-400">Here's your operational overview</p>
         </div>
         {health && (
-          <div className={`px-4 py-2 rounded-xl border text-sm font-bold ${healthColor[health.score] || healthColor.green}`}>
+          <div className={`px-4 py-2 rounded-xl border text-sm font-bold w-full sm:w-auto ${healthColor[health.score] || healthColor.green}`}>
             {healthEmoji[health.score]} System Health: {health.score?.toUpperCase()}
           </div>
         )}
@@ -82,14 +80,14 @@ export default function DashboardPage() {
           </div>
           <div className="divide-y divide-gray-100 dark:divide-gray-700 max-h-80 overflow-y-auto">
             {expandedIncidents.map((inc) => (
-              <div key={inc.id} onClick={() => navigate(`/incidents/${inc.id}`)} className="flex items-center gap-3 p-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer">
+              <div key={inc.id} onClick={() => navigate(`/incidents/${inc.id}`)} className="flex flex-wrap sm:flex-nowrap items-start sm:items-center gap-2 sm:gap-3 p-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer">
                 <div className={`w-2 h-8 rounded-full ${inc.severity >= 4 ? 'bg-red-500' : inc.severity >= 3 ? 'bg-orange-400' : inc.severity >= 2 ? 'bg-yellow-400' : 'bg-green-400'}`} />
-                <span className="text-xs font-mono text-gray-400 w-8">#{inc.id}</span>
-                <div className="flex-1 min-w-0">
+                <span className="text-xs font-mono text-gray-400 w-10 shrink-0">#{inc.id}</span>
+                <div className="flex-1 min-w-0 w-full sm:w-auto">
                   <p className="text-sm font-medium truncate">{inc.type} — {inc.areaId || 'Unknown area'}</p>
                   <p className="text-xs text-gray-500 truncate">{inc.description}</p>
                 </div>
-                <span className="text-xs text-gray-400">{inc.responderName || (inc.assignedTo ? `#${inc.assignedTo}` : 'Unassigned')}</span>
+                <span className="text-xs text-gray-400 sm:max-w-32 truncate">{inc.responderName || (inc.assignedTo ? `#${inc.assignedTo}` : 'Unassigned')}</span>
                 <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${inc.status === 'active' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300' : inc.status === 'resolved' ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300'}`}>
                   {inc.status}
                 </span>
@@ -108,9 +106,9 @@ export default function DashboardPage() {
           </div>
           <div className="divide-y divide-gray-100 dark:divide-gray-700">
             {recentIncidents.map((inc) => (
-              <div key={inc.id} onClick={() => navigate(`/incidents/${inc.id}`)} className="flex items-center gap-3 p-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer">
+              <div key={inc.id} onClick={() => navigate(`/incidents/${inc.id}`)} className="flex flex-wrap sm:flex-nowrap items-start sm:items-center gap-2 sm:gap-3 p-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer">
                 <div className={`w-2 h-8 rounded-full ${inc.severity >= 4 ? 'bg-red-500' : inc.severity >= 3 ? 'bg-orange-400' : inc.severity >= 2 ? 'bg-yellow-400' : 'bg-green-400'}`} />
-                <div className="flex-1 min-w-0">
+                <div className="flex-1 min-w-0 w-full sm:w-auto">
                   <p className="text-sm font-medium truncate">{inc.type} — {inc.areaId || 'Unknown area'}</p>
                   <p className="text-xs text-gray-500 truncate">{inc.description}</p>
                 </div>

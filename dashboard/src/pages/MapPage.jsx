@@ -7,7 +7,22 @@ import { usePreferencesStore } from '../stores/preferencesStore'
 import { Layers, X, Eye, EyeOff } from 'lucide-react'
 import mapboxgl from 'mapbox-gl'
 
-mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN || ''
+const MAPBOX_TOKEN = (import.meta.env.VITE_MAPBOX_TOKEN || '').trim()
+mapboxgl.accessToken = MAPBOX_TOKEN
+
+const FALLBACK_STYLE = {
+  version: 8,
+  sources: {
+    osm: {
+      type: 'raster',
+      tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+      tileSize: 256,
+      maxzoom: 19,
+      attribution: '© OpenStreetMap contributors',
+    },
+  },
+  layers: [{ id: 'osm', type: 'raster', source: 'osm' }],
+}
 
 const SEVERITY_COLORS = ['#22c55e', '#eab308', '#f97316', '#ef4444', '#991b1b']
 const STATUS_COLORS = { active: '#ef4444', 'in-progress': '#f97316', assigned: '#eab308', resolved: '#22c55e', submitted: '#9ca3af' }
@@ -15,6 +30,7 @@ const STATUS_COLORS = { active: '#ef4444', 'in-progress': '#f97316', assigned: '
 export default function MapPage() {
   const user = useAuthStore((s) => s.user)
   const [activeParish, setActiveParish] = useState(null)
+  const [mapTokenIssue, setMapTokenIssue] = useState(!MAPBOX_TOKEN)
   const mapContainer = useRef(null)
   const mapRef = useRef(null)
   const [mapLoaded, setMapLoaded] = useState(false)
@@ -96,20 +112,26 @@ export default function MapPage() {
   // Initialize map
   useEffect(() => {
     if (mapRef.current || !mapContainer.current) return
-    if (!mapboxgl.accessToken) {
-      // Fallback: show a message if no token
-      mapContainer.current.innerHTML = '<div class="flex items-center justify-center h-full text-gray-500 dark:text-gray-400"><p class="text-center">Set VITE_MAPBOX_TOKEN in .env to enable the map.<br/>Using data views in the meantime.</p></div>'
-      return
-    }
+    let fallbackApplied = !MAPBOX_TOKEN
 
     const map = new mapboxgl.Map({
       container: mapContainer.current,
-      style: `mapbox://styles/mapbox/${mapStyle}`,
+      style: fallbackApplied ? FALLBACK_STYLE : `mapbox://styles/mapbox/${mapStyle}`,
       center: [-77.3, 18.1],
       zoom: 9,
     })
 
     map.addControl(new mapboxgl.NavigationControl(), 'top-right')
+
+    map.on('error', (event) => {
+      const msg = event?.error?.message || ''
+      const isTokenIssue = /access token|unauthorized|forbidden|401|403/i.test(msg)
+      if (!fallbackApplied && isTokenIssue) {
+        fallbackApplied = true
+        setMapTokenIssue(true)
+        map.setStyle(FALLBACK_STYLE)
+      }
+    })
 
     map.on('load', () => {
       // Incidents source
@@ -265,6 +287,12 @@ export default function MapPage() {
 
   return (
     <div className="relative h-full">
+      {mapTokenIssue && (
+        <div className="absolute top-14 left-1/2 -translate-x-1/2 z-20 bg-amber-100 text-amber-800 border border-amber-200 px-3 py-1.5 rounded-lg text-xs shadow">
+          Mapbox tiles unavailable. Showing OpenStreetMap fallback.
+        </div>
+      )}
+
       {/* Active Location Indicator */}
       {user && (user.role === 'volunteer' || user.role === 'coordinator') && activeParish && (
         <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 bg-white dark:bg-gray-800 px-4 py-2 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 text-sm font-medium text-gray-700 dark:text-gray-200 flex items-center gap-2">
@@ -305,8 +333,11 @@ export default function MapPage() {
         {['dark-v11', 'light-v11', 'satellite-streets-v12'].map((s) => (
           <button
             key={s}
-            onClick={() => { if (mapRef.current) mapRef.current.setStyle(`mapbox://styles/mapbox/${s}`) }}
-            className={`px-2 py-1 text-[10px] rounded font-medium ${mapStyle === s ? 'bg-teal-100 dark:bg-teal-900/40 text-teal-700' : 'text-gray-500 hover:text-gray-700'}`}
+            disabled={mapTokenIssue}
+            onClick={() => {
+              if (mapRef.current && !mapTokenIssue) mapRef.current.setStyle(`mapbox://styles/mapbox/${s}`)
+            }}
+            className={`px-2 py-1 text-[10px] rounded font-medium ${mapStyle === s ? 'bg-teal-100 dark:bg-teal-900/40 text-teal-700' : 'text-gray-500 hover:text-gray-700'} ${mapTokenIssue ? 'opacity-50 cursor-not-allowed' : ''}`}
           >
             {s.split('-')[0]}
           </button>
@@ -348,30 +379,6 @@ export default function MapPage() {
         </div>
       )}
 
-      {/* No mapbox token fallback - data summary */}
-      {!mapboxgl.accessToken && (
-        <div className="absolute inset-0 flex items-center justify-center bg-gray-100 dark:bg-gray-900">
-          <div className="text-center space-y-4 max-w-md">
-            <Layers className="w-12 h-12 text-gray-400 mx-auto" />
-            <h2 className="text-lg font-semibold">Map Requires Mapbox Token</h2>
-            <p className="text-sm text-gray-500">Add <code className="bg-gray-200 dark:bg-gray-700 px-1.5 py-0.5 rounded text-xs">VITE_MAPBOX_TOKEN=your_token</code> to the <code className="bg-gray-200 dark:bg-gray-700 px-1.5 py-0.5 rounded text-xs">.env</code> file</p>
-            <div className="grid grid-cols-3 gap-3 mt-4">
-              <div className="bg-white dark:bg-gray-800 p-3 rounded-lg border border-gray-200 dark:border-gray-700">
-                <p className="text-xl font-bold">{incidents.length}</p>
-                <p className="text-xs text-gray-500">Incidents</p>
-              </div>
-              <div className="bg-white dark:bg-gray-800 p-3 rounded-lg border border-gray-200 dark:border-gray-700">
-                <p className="text-xl font-bold">{volunteers.length}</p>
-                <p className="text-xs text-gray-500">Volunteers</p>
-              </div>
-              <div className="bg-white dark:bg-gray-800 p-3 rounded-lg border border-gray-200 dark:border-gray-700">
-                <p className="text-xl font-bold">{resources.length}</p>
-                <p className="text-xs text-gray-500">Resources</p>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

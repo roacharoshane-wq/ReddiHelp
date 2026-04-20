@@ -30,7 +30,7 @@ export default function NotificationPanel({ onClose }) {
   return (
     <div className="fixed inset-0 z-50" onClick={onClose}>
       <div
-        className="absolute right-0 top-14 w-80 h-[calc(100%-56px)] bg-white dark:bg-gray-800 border-l border-gray-200 dark:border-gray-700 shadow-xl overflow-y-auto"
+        className="absolute right-0 top-14 w-full sm:w-80 h-[calc(100%-56px)] bg-white dark:bg-gray-800 border-l border-gray-200 dark:border-gray-700 shadow-xl overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between p-3 border-b border-gray-200 dark:border-gray-700">
