@@ -75,6 +75,7 @@ const LEGACY_STYLE_MAP = {
 }
 
 const MAPBOX_STYLE_IDS = new Set(MAPBOX_STYLE_OPTIONS.map((s) => s.id))
+const WARNING_VISIBLE_MS = 4000
 
 function normalizeMapboxStyle(style) {
   const mapped = LEGACY_STYLE_MAP[style] || style
@@ -94,11 +95,13 @@ export default function MapPage() {
     lastError: '',
     tileUrl: '',
   })
+  const [warningsVisible, setWarningsVisible] = useState(false)
   const mapContainer = useRef(null)
   const mapRef = useRef(null)
   const incidentsRef = useRef([])
   const volunteersRef = useRef([])
   const resourcesRef = useRef([])
+  const warningTimerRef = useRef(null)
   const [mapLoaded, setMapLoaded] = useState(false)
   const [showLayers, setShowLayers] = useState(false)
   const [sidePanel, setSidePanel] = useState(null)
@@ -135,6 +138,17 @@ export default function MapPage() {
   useEffect(() => {
     resourcesRef.current = resources
   }, [resources])
+
+  useEffect(() => {
+    if (!mapTokenIssue && !mapDiagnostics.lastError) return
+    setWarningsVisible(true)
+    clearTimeout(warningTimerRef.current)
+    warningTimerRef.current = setTimeout(() => setWarningsVisible(false), WARNING_VISIBLE_MS)
+  }, [mapTokenIssue, mapDiagnostics.lastError, mapDiagnostics.provider, mapDiagnostics.tileUrl])
+
+  useEffect(() => {
+    return () => clearTimeout(warningTimerRef.current)
+  }, [])
 
   useEffect(() => {
     if (mapStyle !== normalizedMapStyle) setMapStyle(normalizedMapStyle)
@@ -572,10 +586,11 @@ export default function MapPage() {
     { key: 'heatmap', label: 'Heatmap', layers: ['incident-heatmap'] },
     { key: 'coverage', label: 'Coverage', layers: ['volunteer-coverage'] },
   ]
+  const isUsingMapbox = !mapTokenIssue && activeBasemapLabel === 'Mapbox'
 
   return (
     <div className="relative h-full">
-      {mapTokenIssue && (
+      {warningsVisible && mapTokenIssue && (
         <div className="absolute top-14 left-1/2 -translate-x-1/2 z-20 bg-amber-100 text-amber-800 border border-amber-200 px-3 py-1.5 rounded-lg text-xs shadow">
           Mapbox unavailable. Using {activeBasemapLabel} basemap.
         </div>
@@ -618,23 +633,28 @@ export default function MapPage() {
 
       {/* Style switcher */}
       <div className="absolute top-3 right-14 z-10 flex gap-1 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 p-1">
-        {MAPBOX_STYLE_OPTIONS.map((styleOpt) => (
-          <button
-            key={styleOpt.id}
-            disabled={mapTokenIssue}
-            onClick={() => {
-              if (!mapRef.current || mapTokenIssue) return
-              setMapStyle(styleOpt.id)
-              mapRef.current.setStyle(`mapbox://styles/mapbox/${styleOpt.id}`)
-            }}
-            className={`px-2 py-1 text-[10px] rounded font-medium ${normalizedMapStyle === styleOpt.id ? 'bg-teal-100 dark:bg-teal-900/40 text-teal-700' : 'text-gray-500 hover:text-gray-700'} ${mapTokenIssue ? 'opacity-50 cursor-not-allowed' : ''}`}
-          >
-            {styleOpt.label}
-          </button>
-        ))}
+        {isUsingMapbox ? (
+          MAPBOX_STYLE_OPTIONS.map((styleOpt) => (
+            <button
+              key={styleOpt.id}
+              onClick={() => {
+                if (!mapRef.current) return
+                setMapStyle(styleOpt.id)
+                mapRef.current.setStyle(`mapbox://styles/mapbox/${styleOpt.id}`)
+              }}
+              className={`px-2 py-1 text-[10px] rounded font-medium ${normalizedMapStyle === styleOpt.id ? 'bg-teal-100 dark:bg-teal-900/40 text-teal-700' : 'text-gray-500 hover:text-gray-700'}`}
+            >
+              {styleOpt.label}
+            </button>
+          ))
+        ) : (
+          <div className="px-2 py-1 text-[10px] rounded font-medium bg-teal-100 dark:bg-teal-900/40 text-teal-700 dark:text-teal-300">
+            {activeBasemapLabel}
+          </div>
+        )}
       </div>
 
-      {(mapDiagnostics.lastError || mapTokenIssue) && (
+      {warningsVisible && (mapDiagnostics.lastError || mapTokenIssue) && (
         <div className="absolute bottom-3 left-3 z-20 max-w-sm bg-black/75 text-white rounded-lg px-3 py-2 text-[11px] leading-snug shadow-lg">
           <p className="font-semibold">Basemap: {mapDiagnostics.provider || activeBasemapLabel}</p>
           {mapDiagnostics.lastError && <p className="mt-1 break-words">{mapDiagnostics.lastError}</p>}
