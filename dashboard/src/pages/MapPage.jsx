@@ -10,7 +10,7 @@ import mapboxgl from 'mapbox-gl'
 const MAPBOX_TOKEN = (import.meta.env.VITE_MAPBOX_TOKEN || '').trim()
 mapboxgl.accessToken = MAPBOX_TOKEN
 
-const FALLBACK_STYLE = {
+const OSM_STYLE = {
   version: 8,
   sources: {
     osm: {
@@ -24,6 +24,45 @@ const FALLBACK_STYLE = {
   layers: [{ id: 'osm', type: 'raster', source: 'osm' }],
 }
 
+const CARTO_STYLE = {
+  version: 8,
+  sources: {
+    carto: {
+      type: 'raster',
+      tiles: [
+        'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+        'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+        'https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+      ],
+      tileSize: 256,
+      maxzoom: 20,
+      attribution: '© OpenStreetMap © CARTO',
+    },
+  },
+  layers: [{ id: 'carto', type: 'raster', source: 'carto' }],
+}
+
+const ESRI_STYLE = {
+  version: 8,
+  sources: {
+    esri: {
+      type: 'raster',
+      tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}'],
+      tileSize: 256,
+      maxzoom: 19,
+      attribution: 'Tiles © Esri',
+    },
+  },
+  layers: [{ id: 'esri', type: 'raster', source: 'esri' }],
+}
+
+const BASEMAP_PROVIDERS = [
+  ...(MAPBOX_TOKEN ? [{ key: 'mapbox', label: 'Mapbox', style: 'mapbox' }] : []),
+  { key: 'osm', label: 'OpenStreetMap', style: OSM_STYLE },
+  { key: 'carto', label: 'CARTO', style: CARTO_STYLE },
+  { key: 'esri', label: 'Esri', style: ESRI_STYLE },
+]
+
 const SEVERITY_COLORS = ['#22c55e', '#eab308', '#f97316', '#ef4444', '#991b1b']
 const STATUS_COLORS = { active: '#ef4444', 'in-progress': '#f97316', assigned: '#eab308', resolved: '#22c55e', submitted: '#9ca3af' }
 
@@ -31,8 +70,17 @@ export default function MapPage() {
   const user = useAuthStore((s) => s.user)
   const [activeParish, setActiveParish] = useState(null)
   const [mapTokenIssue, setMapTokenIssue] = useState(!MAPBOX_TOKEN)
+  const [activeBasemapLabel, setActiveBasemapLabel] = useState(MAPBOX_TOKEN ? 'Mapbox' : BASEMAP_PROVIDERS[0].label)
+  const [mapDiagnostics, setMapDiagnostics] = useState({
+    provider: MAPBOX_TOKEN ? 'Mapbox' : BASEMAP_PROVIDERS[0].label,
+    lastError: '',
+    tileUrl: '',
+  })
   const mapContainer = useRef(null)
   const mapRef = useRef(null)
+  const incidentsRef = useRef([])
+  const volunteersRef = useRef([])
+  const resourcesRef = useRef([])
   const [mapLoaded, setMapLoaded] = useState(false)
   const [showLayers, setShowLayers] = useState(false)
   const [sidePanel, setSidePanel] = useState(null)
@@ -56,6 +104,18 @@ export default function MapPage() {
     queryFn: () => api.get('/resources'),
     refetchInterval: 60000,
   })
+
+  useEffect(() => {
+    incidentsRef.current = incidents
+  }, [incidents])
+
+  useEffect(() => {
+    volunteersRef.current = volunteers
+  }, [volunteers])
+
+  useEffect(() => {
+    resourcesRef.current = resources
+  }, [resources])
 
   // Determine active parish for volunteer/coordinator
   useEffect(() => {
@@ -109,128 +169,312 @@ export default function MapPage() {
     }
   }, [user, volunteers])
 
+  const toFiniteNumber = (value) => {
+    const n = Number(value)
+    return Number.isFinite(n) ? n : null
+  }
+
+  const pushIncidentData = (map, rows) => {
+    const src = map.getSource('incidents')
+    if (!src) return
+
+    const features = rows
+      .map((i) => {
+        const lon = toFiniteNumber(i.lon)
+        const lat = toFiniteNumber(i.lat)
+        if (lon == null || lat == null) return null
+        return {
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [lon, lat] },
+          properties: {
+            id: i.id,
+            type: i.type,
+            severity: i.severity,
+            status: i.status,
+            description: i.description,
+            areaId: i.areaId,
+            assignedTo: i.assignedTo,
+            responderName: i.responderName,
+          },
+        }
+      })
+      .filter(Boolean)
+
+    src.setData({ type: 'FeatureCollection', features })
+  }
+
+  const pushVolunteerData = (map, rows) => {
+    const src = map.getSource('volunteers')
+    if (!src) return
+
+    const features = rows
+      .map((v) => {
+        const lon = toFiniteNumber(v.last_lon)
+        const lat = toFiniteNumber(v.last_lat)
+        if (lon == null || lat == null) return null
+        return {
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [lon, lat] },
+          properties: {
+            id: v.id,
+            username: v.username,
+            role: v.role,
+            availability: v.availability,
+            skills: JSON.stringify(v.skills || []),
+            active_tasks: v.active_tasks,
+          },
+        }
+      })
+      .filter(Boolean)
+
+    src.setData({ type: 'FeatureCollection', features })
+  }
+
+  const pushResourceData = (map, rows) => {
+    const src = map.getSource('resources')
+    if (!src) return
+
+    const features = rows.filter((r) => r.location).map((r) => ({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [0, 0] },
+      properties: { id: r.id, type: r.type, quantity: r.quantity },
+    }))
+
+    src.setData({ type: 'FeatureCollection', features })
+  }
+
   // Initialize map
   useEffect(() => {
     if (mapRef.current || !mapContainer.current) return
-    let fallbackApplied = !MAPBOX_TOKEN
-    let initialStyleReady = fallbackApplied
+    let providerIndex = 0
+    let initialStyleReady = false
+    let styleStartupTimer = null
+    let lastFailoverAt = 0
+
+    const getProvider = () => BASEMAP_PROVIDERS[providerIndex]
+    const resolveProviderStyle = (provider) => {
+      if (provider.style === 'mapbox') return `mapbox://styles/mapbox/${mapStyle}`
+      return provider.style
+    }
 
     const map = new mapboxgl.Map({
       container: mapContainer.current,
-      style: fallbackApplied ? FALLBACK_STYLE : `mapbox://styles/mapbox/${mapStyle}`,
+      style: resolveProviderStyle(getProvider()),
       center: [-77.3, 18.1],
       zoom: 9,
     })
 
-    const applyFallbackStyle = () => {
-      if (fallbackApplied) return
-      fallbackApplied = true
-      setMapTokenIssue(true)
-      map.setStyle(FALLBACK_STYLE)
+    const setProviderState = () => {
+      const provider = getProvider()
+      setActiveBasemapLabel(provider.label)
+      setMapTokenIssue(provider.key !== 'mapbox')
+      setMapDiagnostics((prev) => ({ ...prev, provider: provider.label }))
     }
 
-    // If the initial mapbox style never completes, force fallback so users still see a basemap.
-    const startupFallbackTimer = setTimeout(() => {
-      if (!initialStyleReady) applyFallbackStyle()
-    }, 5000)
+    const armStartupTimer = () => {
+      clearTimeout(styleStartupTimer)
+      styleStartupTimer = setTimeout(() => {
+        if (!initialStyleReady) switchToNextProvider('style startup timeout')
+      }, 5500)
+    }
+
+    const switchToNextProvider = (reason, tileUrl = '') => {
+      if (providerIndex >= BASEMAP_PROVIDERS.length - 1) {
+        setMapDiagnostics((prev) => ({
+          ...prev,
+          provider: getProvider().label,
+          lastError: reason,
+          tileUrl: tileUrl || prev.tileUrl,
+        }))
+        return false
+      }
+
+      providerIndex += 1
+      lastFailoverAt = Date.now()
+      initialStyleReady = false
+
+      const next = getProvider()
+      setActiveBasemapLabel(next.label)
+      setMapTokenIssue(next.key !== 'mapbox')
+      setMapDiagnostics((prev) => ({
+        ...prev,
+        provider: next.label,
+        lastError: reason,
+        tileUrl: tileUrl || prev.tileUrl,
+      }))
+
+      map.setStyle(resolveProviderStyle(next))
+      armStartupTimer()
+      return true
+    }
+
+    const onIncidentClick = (e) => {
+      const props = e.features?.[0]?.properties || {}
+      setSidePanel({ type: 'incident', data: { ...props, lat: e.lngLat.lat, lon: e.lngLat.lng } })
+    }
+
+    const onVolunteerClick = (e) => {
+      const props = e.features?.[0]?.properties || {}
+      setSidePanel({ type: 'volunteer', data: { ...props, lat: e.lngLat.lat, lon: e.lngLat.lng } })
+    }
+
+    const onClusterClick = (e) => {
+      const features = map.queryRenderedFeatures(e.point, { layers: ['incident-clusters'] })
+      if (!features.length) return
+
+      const clusterId = features[0].properties.cluster_id
+      const source = map.getSource('incidents')
+      if (!source || !source.getClusterExpansionZoom) return
+
+      source.getClusterExpansionZoom(clusterId, (err, zoom) => {
+        if (!err) map.easeTo({ center: features[0].geometry.coordinates, zoom })
+      })
+    }
+
+    const setPointer = () => {
+      map.getCanvas().style.cursor = 'pointer'
+    }
+
+    const clearPointer = () => {
+      map.getCanvas().style.cursor = ''
+    }
+
+    const ensureOperationalLayers = () => {
+      if (!map.getSource('incidents')) {
+        map.addSource('incidents', { type: 'geojson', data: { type: 'FeatureCollection', features: [] }, cluster: true, clusterMaxZoom: 14, clusterRadius: 50 })
+      }
+      if (!map.getLayer('incident-clusters')) {
+        map.addLayer({ id: 'incident-clusters', type: 'circle', source: 'incidents', filter: ['has', 'point_count'], paint: { 'circle-color': ['step', ['get', 'point_count'], '#51bbd6', 10, '#f1f075', 30, '#f28cb1'], 'circle-radius': ['step', ['get', 'point_count'], 18, 10, 24, 30, 32] } })
+      }
+      if (!map.getLayer('incident-cluster-count')) {
+        map.addLayer({ id: 'incident-cluster-count', type: 'symbol', source: 'incidents', filter: ['has', 'point_count'], layout: { 'text-field': '{point_count_abbreviated}', 'text-size': 12 } })
+      }
+      if (!map.getLayer('incident-points')) {
+        map.addLayer({ id: 'incident-points', type: 'circle', source: 'incidents', filter: ['!', ['has', 'point_count']], paint: { 'circle-color': ['match', ['get', 'status'], 'active', '#ef4444', 'in-progress', '#f97316', 'resolved', '#22c55e', '#9ca3af'], 'circle-radius': ['interpolate', ['linear'], ['get', 'severity'], 1, 6, 5, 14], 'circle-stroke-width': 2, 'circle-stroke-color': '#fff' } })
+      }
+      if (!map.getLayer('incident-pulse')) {
+        map.addLayer({ id: 'incident-pulse', type: 'circle', source: 'incidents', filter: ['all', ['!', ['has', 'point_count']], ['==', ['get', 'assignedTo'], null], ['==', ['get', 'status'], 'active']], paint: { 'circle-color': '#ef4444', 'circle-radius': ['interpolate', ['linear'], ['get', 'severity'], 1, 10, 5, 22], 'circle-opacity': 0.3 } })
+      }
+
+      if (!map.getSource('volunteers')) {
+        map.addSource('volunteers', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
+      }
+      if (!map.getLayer('volunteer-points')) {
+        map.addLayer({ id: 'volunteer-points', type: 'circle', source: 'volunteers', paint: { 'circle-color': ['match', ['get', 'availability'], 'available', '#3b82f6', 'on_task', '#6366f1', '#9ca3af'], 'circle-radius': ['match', ['get', 'availability'], 'available', 7, 'on_task', 6, 5], 'circle-stroke-width': 2, 'circle-stroke-color': '#fff' } })
+      }
+
+      if (!map.getSource('resources')) {
+        map.addSource('resources', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
+      }
+      if (!map.getLayer('resource-points')) {
+        map.addLayer({ id: 'resource-points', type: 'circle', source: 'resources', paint: { 'circle-color': '#eab308', 'circle-radius': 6, 'circle-stroke-width': 2, 'circle-stroke-color': '#fff' }, layout: { visibility: 'none' } })
+      }
+
+      if (!map.getLayer('incident-heatmap')) {
+        map.addLayer({
+          id: 'incident-heatmap', type: 'heatmap', source: 'incidents',
+          maxzoom: 14,
+          paint: {
+            'heatmap-weight': ['interpolate', ['linear'], ['get', 'severity'], 1, 0.3, 5, 1],
+            'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 0, 1, 14, 3],
+            'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 0, 15, 14, 30],
+            'heatmap-color': ['interpolate', ['linear'], ['heatmap-density'], 0, 'rgba(0,0,0,0)', 0.2, '#2196f3', 0.4, '#4caf50', 0.6, '#ffeb3b', 0.8, '#ff9800', 1, '#f44336'],
+            'heatmap-opacity': 0.6,
+          },
+          layout: { visibility: 'none' },
+        })
+      }
+
+      if (!map.getLayer('volunteer-coverage')) {
+        map.addLayer({
+          id: 'volunteer-coverage', type: 'circle', source: 'volunteers',
+          paint: {
+            'circle-color': '#3b82f6',
+            'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 10, 14, 80],
+            'circle-opacity': 0.08,
+            'circle-stroke-width': 1,
+            'circle-stroke-color': '#3b82f6',
+            'circle-stroke-opacity': 0.2,
+          },
+          layout: { visibility: 'none' },
+        })
+      }
+
+      map.off('click', 'incident-points', onIncidentClick)
+      map.on('click', 'incident-points', onIncidentClick)
+      map.off('click', 'volunteer-points', onVolunteerClick)
+      map.on('click', 'volunteer-points', onVolunteerClick)
+      map.off('click', 'incident-clusters', onClusterClick)
+      map.on('click', 'incident-clusters', onClusterClick)
+
+      map.off('mouseenter', 'incident-points', setPointer)
+      map.on('mouseenter', 'incident-points', setPointer)
+      map.off('mouseleave', 'incident-points', clearPointer)
+      map.on('mouseleave', 'incident-points', clearPointer)
+      map.off('mouseenter', 'volunteer-points', setPointer)
+      map.on('mouseenter', 'volunteer-points', setPointer)
+      map.off('mouseleave', 'volunteer-points', clearPointer)
+      map.on('mouseleave', 'volunteer-points', clearPointer)
+    }
 
     map.addControl(new mapboxgl.NavigationControl(), 'top-right')
+    setProviderState()
+    armStartupTimer()
 
-    map.on('error', (event) => {
-      const msg = String(event?.error?.message || '').toLowerCase()
-      const startupMapboxFailure =
-        msg.includes('mapbox') ||
-        msg.includes('access token') ||
-        msg.includes('unauthorized') ||
-        msg.includes('forbidden') ||
-        msg.includes('request failed') ||
-        msg.includes('failed to fetch') ||
-        msg.includes('sprite') ||
-        msg.includes('glyph') ||
-        msg.includes('401') ||
-        msg.includes('403')
-
-      if (!initialStyleReady && startupMapboxFailure) applyFallbackStyle()
+    map.on('style.load', () => {
+      initialStyleReady = true
+      clearTimeout(styleStartupTimer)
+      setProviderState()
+      ensureOperationalLayers()
+      pushIncidentData(map, incidentsRef.current)
+      pushVolunteerData(map, volunteersRef.current)
+      pushResourceData(map, resourcesRef.current)
+      setMapLoaded(true)
     })
 
-    map.on('load', () => {
-      initialStyleReady = true
-      clearTimeout(startupFallbackTimer)
+    map.on('error', (event) => {
+      const message = String(event?.error?.message || 'Map rendering error')
+      const lower = message.toLowerCase()
+      const sourceId = String(event?.sourceId || event?.source?.id || '').toLowerCase()
+      const tileUrl = event?.tile?.request?.url || event?.source?.tiles?.[0] || event?.source?.url || ''
 
-      // Incidents source
-      map.addSource('incidents', { type: 'geojson', data: { type: 'FeatureCollection', features: [] }, cluster: true, clusterMaxZoom: 14, clusterRadius: 50 })
-      map.addLayer({ id: 'incident-clusters', type: 'circle', source: 'incidents', filter: ['has', 'point_count'], paint: { 'circle-color': ['step', ['get', 'point_count'], '#51bbd6', 10, '#f1f075', 30, '#f28cb1'], 'circle-radius': ['step', ['get', 'point_count'], 18, 10, 24, 30, 32] } })
-      map.addLayer({ id: 'incident-cluster-count', type: 'symbol', source: 'incidents', filter: ['has', 'point_count'], layout: { 'text-field': '{point_count_abbreviated}', 'text-size': 12 } })
-      map.addLayer({ id: 'incident-points', type: 'circle', source: 'incidents', filter: ['!', ['has', 'point_count']], paint: { 'circle-color': ['match', ['get', 'status'], 'active', '#ef4444', 'in-progress', '#f97316', 'resolved', '#22c55e', '#9ca3af'], 'circle-radius': ['interpolate', ['linear'], ['get', 'severity'], 1, 6, 5, 14], 'circle-stroke-width': 2, 'circle-stroke-color': '#fff' } })
+      setMapDiagnostics((prev) => ({
+        ...prev,
+        provider: getProvider().label,
+        lastError: message,
+        tileUrl: tileUrl || prev.tileUrl,
+      }))
 
-      // Pulse layer for unassigned
-      map.addLayer({ id: 'incident-pulse', type: 'circle', source: 'incidents', filter: ['all', ['!', ['has', 'point_count']], ['==', ['get', 'assignedTo'], null], ['==', ['get', 'status'], 'active']], paint: { 'circle-color': '#ef4444', 'circle-radius': ['interpolate', ['linear'], ['get', 'severity'], 1, 10, 5, 22], 'circle-opacity': 0.3 } })
+      const networkFailure =
+        lower.includes('failed to fetch') ||
+        lower.includes('request failed') ||
+        lower.includes('forbidden') ||
+        lower.includes('unauthorized') ||
+        lower.includes('access token') ||
+        lower.includes('401') ||
+        lower.includes('403') ||
+        lower.includes('sprite') ||
+        lower.includes('glyph') ||
+        lower.includes('tile')
 
-      // Volunteers source
-      map.addSource('volunteers', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
-      map.addLayer({ id: 'volunteer-points', type: 'circle', source: 'volunteers', paint: { 'circle-color': ['match', ['get', 'availability'], 'available', '#3b82f6', 'on_task', '#6366f1', '#9ca3af'], 'circle-radius': ['match', ['get', 'availability'], 'available', 7, 'on_task', 6, 5], 'circle-stroke-width': 2, 'circle-stroke-color': '#fff' } })
+      const basemapSourceFailure =
+        sourceId.includes('composite') ||
+        sourceId.includes('mapbox') ||
+        sourceId.includes('osm') ||
+        sourceId.includes('carto') ||
+        sourceId.includes('esri')
 
-      // Resources source
-      map.addSource('resources', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
-      map.addLayer({ id: 'resource-points', type: 'circle', source: 'resources', paint: { 'circle-color': '#eab308', 'circle-radius': 6, 'circle-stroke-width': 2, 'circle-stroke-color': '#fff' }, layout: { visibility: 'none' } })
+      const shouldFailover = networkFailure && (!initialStyleReady || basemapSourceFailure)
+      const failoverCooldownElapsed = Date.now() - lastFailoverAt > 1000
 
-      // Heatmap layer — incident density
-      map.addLayer({
-        id: 'incident-heatmap', type: 'heatmap', source: 'incidents',
-        maxzoom: 14,
-        paint: {
-          'heatmap-weight': ['interpolate', ['linear'], ['get', 'severity'], 1, 0.3, 5, 1],
-          'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 0, 1, 14, 3],
-          'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 0, 15, 14, 30],
-          'heatmap-color': ['interpolate', ['linear'], ['heatmap-density'], 0, 'rgba(0,0,0,0)', 0.2, '#2196f3', 0.4, '#4caf50', 0.6, '#ffeb3b', 0.8, '#ff9800', 1, '#f44336'],
-          'heatmap-opacity': 0.6,
-        },
-        layout: { visibility: 'none' },
-      })
-
-      // Coverage layer — translucent circles around volunteers (5km radius approx)
-      map.addLayer({
-        id: 'volunteer-coverage', type: 'circle', source: 'volunteers',
-        paint: {
-          'circle-color': '#3b82f6',
-          'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 10, 14, 80],
-          'circle-opacity': 0.08,
-          'circle-stroke-width': 1,
-          'circle-stroke-color': '#3b82f6',
-          'circle-stroke-opacity': 0.2,
-        },
-        layout: { visibility: 'none' },
-      })
-
-      // Click handlers
-      map.on('click', 'incident-points', (e) => {
-        const props = e.features[0].properties
-        setSidePanel({ type: 'incident', data: { ...props, lat: e.lngLat.lat, lon: e.lngLat.lng } })
-      })
-      map.on('click', 'volunteer-points', (e) => {
-        const props = e.features[0].properties
-        setSidePanel({ type: 'volunteer', data: { ...props, lat: e.lngLat.lat, lon: e.lngLat.lng } })
-      })
-      map.on('click', 'incident-clusters', (e) => {
-        const features = map.queryRenderedFeatures(e.point, { layers: ['incident-clusters'] })
-        const clusterId = features[0].properties.cluster_id
-        map.getSource('incidents').getClusterExpansionZoom(clusterId, (err, zoom) => {
-          if (!err) map.easeTo({ center: features[0].geometry.coordinates, zoom })
-        })
-      })
-
-      // Cursor changes
-      map.on('mouseenter', 'incident-points', () => { map.getCanvas().style.cursor = 'pointer' })
-      map.on('mouseleave', 'incident-points', () => { map.getCanvas().style.cursor = '' })
-      map.on('mouseenter', 'volunteer-points', () => { map.getCanvas().style.cursor = 'pointer' })
-      map.on('mouseleave', 'volunteer-points', () => { map.getCanvas().style.cursor = '' })
-
-      setMapLoaded(true)
+      if (shouldFailover && failoverCooldownElapsed) {
+        switchToNextProvider(message, tileUrl)
+      }
     })
 
     mapRef.current = map
     return () => {
-      clearTimeout(startupFallbackTimer)
+      clearTimeout(styleStartupTimer)
       map.remove()
       mapRef.current = null
     }
@@ -239,37 +483,19 @@ export default function MapPage() {
   // Update incident data
   useEffect(() => {
     if (!mapLoaded || !mapRef.current) return
-    const features = incidents.map((i) => ({
-      type: 'Feature',
-      geometry: { type: 'Point', coordinates: [i.lon, i.lat] },
-      properties: { id: i.id, type: i.type, severity: i.severity, status: i.status, description: i.description, areaId: i.areaId, assignedTo: i.assignedTo, responderName: i.responderName },
-    }))
-    const src = mapRef.current.getSource('incidents')
-    if (src) src.setData({ type: 'FeatureCollection', features })
+    pushIncidentData(mapRef.current, incidents)
   }, [incidents, mapLoaded])
 
   // Update volunteer data
   useEffect(() => {
     if (!mapLoaded || !mapRef.current) return
-    const features = volunteers.filter(v => v.last_lat && v.last_lon).map((v) => ({
-      type: 'Feature',
-      geometry: { type: 'Point', coordinates: [v.last_lon, v.last_lat] },
-      properties: { id: v.id, username: v.username, role: v.role, availability: v.availability, skills: JSON.stringify(v.skills || []), active_tasks: v.active_tasks },
-    }))
-    const src = mapRef.current.getSource('volunteers')
-    if (src) src.setData({ type: 'FeatureCollection', features })
+    pushVolunteerData(mapRef.current, volunteers)
   }, [volunteers, mapLoaded])
 
   // Update resource data
   useEffect(() => {
     if (!mapLoaded || !mapRef.current) return
-    const features = resources.filter(r => r.location).map((r) => ({
-      type: 'Feature',
-      geometry: { type: 'Point', coordinates: [0, 0] }, // Resources don't have easy lat/lon extraction
-      properties: { id: r.id, type: r.type, quantity: r.quantity },
-    }))
-    const src = mapRef.current.getSource('resources')
-    if (src) src.setData({ type: 'FeatureCollection', features })
+    pushResourceData(mapRef.current, resources)
   }, [resources, mapLoaded])
 
   // Socket.io real-time updates
@@ -316,7 +542,7 @@ export default function MapPage() {
     <div className="relative h-full">
       {mapTokenIssue && (
         <div className="absolute top-14 left-1/2 -translate-x-1/2 z-20 bg-amber-100 text-amber-800 border border-amber-200 px-3 py-1.5 rounded-lg text-xs shadow">
-          Mapbox tiles unavailable. Showing OpenStreetMap fallback.
+          Mapbox unavailable. Using {activeBasemapLabel} basemap.
         </div>
       )}
 
@@ -370,6 +596,14 @@ export default function MapPage() {
           </button>
         ))}
       </div>
+
+      {(mapDiagnostics.lastError || mapTokenIssue) && (
+        <div className="absolute bottom-3 left-3 z-20 max-w-sm bg-black/75 text-white rounded-lg px-3 py-2 text-[11px] leading-snug shadow-lg">
+          <p className="font-semibold">Basemap: {mapDiagnostics.provider || activeBasemapLabel}</p>
+          {mapDiagnostics.lastError && <p className="mt-1 break-words">{mapDiagnostics.lastError}</p>}
+          {mapDiagnostics.tileUrl && <p className="mt-1 break-all text-gray-200">{mapDiagnostics.tileUrl}</p>}
+        </div>
+      )}
 
       {/* Side panel */}
       {sidePanel && (
