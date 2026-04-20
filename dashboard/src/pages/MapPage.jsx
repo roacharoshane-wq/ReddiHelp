@@ -1,0 +1,368 @@
+import { useEffect, useRef, useState } from 'react'
+import { useAuthStore } from '../stores/authStore'
+import { useQuery } from '@tanstack/react-query'
+import { api } from '../api/client'
+import { useSocketStore } from '../stores/socketStore'
+import { usePreferencesStore } from '../stores/preferencesStore'
+import { Layers, X, Eye, EyeOff } from 'lucide-react'
+import mapboxgl from 'mapbox-gl'
+
+mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN || ''
+
+const SEVERITY_COLORS = ['#22c55e', '#eab308', '#f97316', '#ef4444', '#991b1b']
+const STATUS_COLORS = { active: '#ef4444', 'in-progress': '#f97316', assigned: '#eab308', resolved: '#22c55e', submitted: '#9ca3af' }
+
+export default function MapPage() {
+  const user = useAuthStore((s) => s.user)
+    // Determine active parish for volunteer/coordinator
+    const [activeParish, setActiveParish] = useState(null)
+    useEffect(() => {
+      if (!user || (user.role !== 'volunteer' && user.role !== 'coordinator')) {
+        setActiveParish(null)
+        return
+      }
+      // Find user's parish by matching their last_lat/last_lon to a parish center (approximate)
+      // Or, if user has areaId/parish property, use that
+      // For demo, use volunteers list if user is volunteer
+      let lat = user.last_lat, lon = user.last_lon
+      if (!lat || !lon) {
+        // Try to find in volunteers list
+        const v = volunteers.find(v => v.id === user.id)
+        if (v) { lat = v.last_lat; lon = v.last_lon }
+      }
+      if (lat && lon) {
+        // Find closest parish
+        const parishList = [
+          { name: 'Kingston',        lat: 17.9712, lon: -76.7936 },
+          { name: 'Saint Andrew',    lat: 18.0800, lon: -76.7800 },
+          { name: 'Saint Thomas',    lat: 17.9200, lon: -76.3500 },
+          { name: 'Portland',        lat: 18.1500, lon: -76.4200 },
+          { name: 'Saint Mary',      lat: 18.3700, lon: -76.9000 },
+          { name: 'Saint Ann',       lat: 18.4300, lon: -77.2000 },
+          { name: 'Trelawny',        lat: 18.3500, lon: -77.6500 },
+          { name: 'Saint James',     lat: 18.4700, lon: -77.9200 },
+          { name: 'Hanover',         lat: 18.4000, lon: -78.1300 },
+          { name: 'Westmoreland',    lat: 18.2200, lon: -78.1000 },
+          { name: 'Saint Elizabeth', lat: 18.0500, lon: -77.7000 },
+          { name: 'Manchester',      lat: 18.0500, lon: -77.5000 },
+          { name: 'Clarendon',       lat: 17.9500, lon: -77.2000 },
+          { name: 'Saint Catherine', lat: 18.0500, lon: -77.0500 },
+        ]
+        let minDist = Infinity, closest = null
+        for (const p of parishList) {
+          const d = Math.sqrt(Math.pow(p.lat - lat, 2) + Math.pow(p.lon - lon, 2))
+          if (d < minDist) { minDist = d; closest = p }
+        }
+        setActiveParish(closest ? closest.name : null)
+      } else {
+        setActiveParish(null)
+      }
+    }, [user, volunteers])
+  const mapContainer = useRef(null)
+  const mapRef = useRef(null)
+  const [mapLoaded, setMapLoaded] = useState(false)
+  const [showLayers, setShowLayers] = useState(false)
+  const [sidePanel, setSidePanel] = useState(null)
+  const socket = useSocketStore((s) => s.socket)
+  const { layerVisibility, setLayerVisibility, mapStyle } = usePreferencesStore()
+
+  const { data: incidents = [] } = useQuery({
+    queryKey: ['incidents'],
+    queryFn: () => api.get('/incidents'),
+    refetchInterval: 30000,
+  })
+
+  const { data: volunteers = [] } = useQuery({
+    queryKey: ['volunteers'],
+    queryFn: () => api.get('/volunteers/list'),
+    refetchInterval: 30000,
+  })
+
+  const { data: resources = [] } = useQuery({
+    queryKey: ['resources'],
+    queryFn: () => api.get('/resources'),
+    refetchInterval: 60000,
+  })
+
+  // Initialize map
+  useEffect(() => {
+    if (mapRef.current || !mapContainer.current) return
+    if (!mapboxgl.accessToken) {
+      // Fallback: show a message if no token
+      mapContainer.current.innerHTML = '<div class="flex items-center justify-center h-full text-gray-500 dark:text-gray-400"><p class="text-center">Set VITE_MAPBOX_TOKEN in .env to enable the map.<br/>Using data views in the meantime.</p></div>'
+      return
+    }
+
+    const map = new mapboxgl.Map({
+      container: mapContainer.current,
+      style: `mapbox://styles/mapbox/${mapStyle}`,
+      center: [-77.3, 18.1],
+      zoom: 9,
+    })
+
+    map.addControl(new mapboxgl.NavigationControl(), 'top-right')
+
+    map.on('load', () => {
+      // Incidents source
+      map.addSource('incidents', { type: 'geojson', data: { type: 'FeatureCollection', features: [] }, cluster: true, clusterMaxZoom: 14, clusterRadius: 50 })
+      map.addLayer({ id: 'incident-clusters', type: 'circle', source: 'incidents', filter: ['has', 'point_count'], paint: { 'circle-color': ['step', ['get', 'point_count'], '#51bbd6', 10, '#f1f075', 30, '#f28cb1'], 'circle-radius': ['step', ['get', 'point_count'], 18, 10, 24, 30, 32] } })
+      map.addLayer({ id: 'incident-cluster-count', type: 'symbol', source: 'incidents', filter: ['has', 'point_count'], layout: { 'text-field': '{point_count_abbreviated}', 'text-size': 12 } })
+      map.addLayer({ id: 'incident-points', type: 'circle', source: 'incidents', filter: ['!', ['has', 'point_count']], paint: { 'circle-color': ['match', ['get', 'status'], 'active', '#ef4444', 'in-progress', '#f97316', 'resolved', '#22c55e', '#9ca3af'], 'circle-radius': ['interpolate', ['linear'], ['get', 'severity'], 1, 6, 5, 14], 'circle-stroke-width': 2, 'circle-stroke-color': '#fff' } })
+
+      // Pulse layer for unassigned
+      map.addLayer({ id: 'incident-pulse', type: 'circle', source: 'incidents', filter: ['all', ['!', ['has', 'point_count']], ['==', ['get', 'assignedTo'], null], ['==', ['get', 'status'], 'active']], paint: { 'circle-color': '#ef4444', 'circle-radius': ['interpolate', ['linear'], ['get', 'severity'], 1, 10, 5, 22], 'circle-opacity': 0.3 } })
+
+      // Volunteers source
+      map.addSource('volunteers', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
+      map.addLayer({ id: 'volunteer-points', type: 'circle', source: 'volunteers', paint: { 'circle-color': ['match', ['get', 'availability'], 'available', '#3b82f6', 'on_task', '#6366f1', '#9ca3af'], 'circle-radius': ['match', ['get', 'availability'], 'available', 7, 'on_task', 6, 5], 'circle-stroke-width': 2, 'circle-stroke-color': '#fff' } })
+
+      // Resources source
+      map.addSource('resources', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
+      map.addLayer({ id: 'resource-points', type: 'circle', source: 'resources', paint: { 'circle-color': '#eab308', 'circle-radius': 6, 'circle-stroke-width': 2, 'circle-stroke-color': '#fff' }, layout: { visibility: 'none' } })
+
+      // Heatmap layer — incident density
+      map.addLayer({
+        id: 'incident-heatmap', type: 'heatmap', source: 'incidents',
+        maxzoom: 14,
+        paint: {
+          'heatmap-weight': ['interpolate', ['linear'], ['get', 'severity'], 1, 0.3, 5, 1],
+          'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 0, 1, 14, 3],
+          'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 0, 15, 14, 30],
+          'heatmap-color': ['interpolate', ['linear'], ['heatmap-density'], 0, 'rgba(0,0,0,0)', 0.2, '#2196f3', 0.4, '#4caf50', 0.6, '#ffeb3b', 0.8, '#ff9800', 1, '#f44336'],
+          'heatmap-opacity': 0.6,
+        },
+        layout: { visibility: 'none' },
+      })
+
+      // Coverage layer — translucent circles around volunteers (5km radius approx)
+      map.addLayer({
+        id: 'volunteer-coverage', type: 'circle', source: 'volunteers',
+        paint: {
+          'circle-color': '#3b82f6',
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 10, 14, 80],
+          'circle-opacity': 0.08,
+          'circle-stroke-width': 1,
+          'circle-stroke-color': '#3b82f6',
+          'circle-stroke-opacity': 0.2,
+        },
+        layout: { visibility: 'none' },
+      })
+
+      // Click handlers
+      map.on('click', 'incident-points', (e) => {
+        const props = e.features[0].properties
+        setSidePanel({ type: 'incident', data: { ...props, lat: e.lngLat.lat, lon: e.lngLat.lng } })
+      })
+      map.on('click', 'volunteer-points', (e) => {
+        const props = e.features[0].properties
+        setSidePanel({ type: 'volunteer', data: { ...props, lat: e.lngLat.lat, lon: e.lngLat.lng } })
+      })
+      map.on('click', 'incident-clusters', (e) => {
+        const features = map.queryRenderedFeatures(e.point, { layers: ['incident-clusters'] })
+        const clusterId = features[0].properties.cluster_id
+        map.getSource('incidents').getClusterExpansionZoom(clusterId, (err, zoom) => {
+          if (!err) map.easeTo({ center: features[0].geometry.coordinates, zoom })
+        })
+      })
+
+      // Cursor changes
+      map.on('mouseenter', 'incident-points', () => { map.getCanvas().style.cursor = 'pointer' })
+      map.on('mouseleave', 'incident-points', () => { map.getCanvas().style.cursor = '' })
+      map.on('mouseenter', 'volunteer-points', () => { map.getCanvas().style.cursor = 'pointer' })
+      map.on('mouseleave', 'volunteer-points', () => { map.getCanvas().style.cursor = '' })
+
+      setMapLoaded(true)
+    })
+
+    mapRef.current = map
+    return () => { map.remove(); mapRef.current = null }
+  }, [])
+
+  // Update incident data
+  useEffect(() => {
+    if (!mapLoaded || !mapRef.current) return
+    const features = incidents.map((i) => ({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [i.lon, i.lat] },
+      properties: { id: i.id, type: i.type, severity: i.severity, status: i.status, description: i.description, areaId: i.areaId, assignedTo: i.assignedTo, responderName: i.responderName },
+    }))
+    const src = mapRef.current.getSource('incidents')
+    if (src) src.setData({ type: 'FeatureCollection', features })
+  }, [incidents, mapLoaded])
+
+  // Update volunteer data
+  useEffect(() => {
+    if (!mapLoaded || !mapRef.current) return
+    const features = volunteers.filter(v => v.last_lat && v.last_lon).map((v) => ({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [v.last_lon, v.last_lat] },
+      properties: { id: v.id, username: v.username, role: v.role, availability: v.availability, skills: JSON.stringify(v.skills || []), active_tasks: v.active_tasks },
+    }))
+    const src = mapRef.current.getSource('volunteers')
+    if (src) src.setData({ type: 'FeatureCollection', features })
+  }, [volunteers, mapLoaded])
+
+  // Update resource data
+  useEffect(() => {
+    if (!mapLoaded || !mapRef.current) return
+    const features = resources.filter(r => r.location).map((r) => ({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [0, 0] }, // Resources don't have easy lat/lon extraction
+      properties: { id: r.id, type: r.type, quantity: r.quantity },
+    }))
+    const src = mapRef.current.getSource('resources')
+    if (src) src.setData({ type: 'FeatureCollection', features })
+  }, [resources, mapLoaded])
+
+  // Socket.io real-time updates
+  useEffect(() => {
+    if (!socket) return
+    const handleIncidentCreated = () => {} // TanStack Query will refetch
+    const handleIncidentUpdated = () => {}
+    const handleUserLocation = (data) => {
+      if (!mapLoaded || !mapRef.current) return
+      // Update volunteer position in source
+    }
+    socket.on('incident:created', handleIncidentCreated)
+    socket.on('incident:updated', handleIncidentUpdated)
+    socket.on('user:location', handleUserLocation)
+    return () => {
+      socket.off('incident:created', handleIncidentCreated)
+      socket.off('incident:updated', handleIncidentUpdated)
+      socket.off('user:location', handleUserLocation)
+    }
+  }, [socket, mapLoaded])
+
+  // Layer visibility toggle
+  const toggleLayer = (key, layerIds) => {
+    const next = !layerVisibility[key]
+    setLayerVisibility(key, next)
+    if (mapRef.current && mapLoaded) {
+      layerIds.forEach((lid) => {
+        if (mapRef.current.getLayer(lid)) {
+          mapRef.current.setLayoutProperty(lid, 'visibility', next ? 'visible' : 'none')
+        }
+      })
+    }
+  }
+
+  const layerConfig = [
+    { key: 'incidents', label: 'Incidents', layers: ['incident-points', 'incident-clusters', 'incident-cluster-count', 'incident-pulse'] },
+    { key: 'volunteers', label: 'Volunteers', layers: ['volunteer-points'] },
+    { key: 'resources', label: 'Resources', layers: ['resource-points'] },
+    { key: 'heatmap', label: 'Heatmap', layers: ['incident-heatmap'] },
+    { key: 'coverage', label: 'Coverage', layers: ['volunteer-coverage'] },
+  ]
+
+  return (
+    <div className="relative h-full">
+      {/* Active Location Indicator */}
+      {user && (user.role === 'volunteer' || user.role === 'coordinator') && activeParish && (
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 bg-white dark:bg-gray-800 px-4 py-2 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 text-sm font-medium text-gray-700 dark:text-gray-200 flex items-center gap-2">
+          <span className="inline-block w-2 h-2 rounded-full bg-green-500 mr-2"></span>
+          Active Location: <span className="ml-1 font-semibold">{activeParish} parish</span>
+        </div>
+      )}
+      <div ref={mapContainer} className="w-full h-full" />
+
+      {/* Layer control */}
+      <div className="absolute top-3 left-3 z-10">
+        <button
+          onClick={() => setShowLayers(!showLayers)}
+          className="bg-white dark:bg-gray-800 p-2.5 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700"
+        >
+          <Layers className="w-4 h-4" />
+        </button>
+
+        {showLayers && (
+          <div className="mt-2 bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700 p-3 w-48">
+            <h3 className="text-xs font-semibold text-gray-500 uppercase mb-2">Layers</h3>
+            {layerConfig.map(({ key, label, layers }) => (
+              <button
+                key={key}
+                onClick={() => toggleLayer(key, layers)}
+                className="flex items-center gap-2 w-full text-left py-1.5 text-sm hover:text-teal-600"
+              >
+                {layerVisibility[key] ? <Eye className="w-3.5 h-3.5 text-teal-500" /> : <EyeOff className="w-3.5 h-3.5 text-gray-400" />}
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Style switcher */}
+      <div className="absolute top-3 right-14 z-10 flex gap-1 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 p-1">
+        {['dark-v11', 'light-v11', 'satellite-streets-v12'].map((s) => (
+          <button
+            key={s}
+            onClick={() => { if (mapRef.current) mapRef.current.setStyle(`mapbox://styles/mapbox/${s}`) }}
+            className={`px-2 py-1 text-[10px] rounded font-medium ${mapStyle === s ? 'bg-teal-100 dark:bg-teal-900/40 text-teal-700' : 'text-gray-500 hover:text-gray-700'}`}
+          >
+            {s.split('-')[0]}
+          </button>
+        ))}
+      </div>
+
+      {/* Side panel */}
+      {sidePanel && (
+        <div className="absolute right-0 top-0 h-full w-96 bg-white dark:bg-gray-800 shadow-2xl border-l border-gray-200 dark:border-gray-700 z-20 overflow-y-auto">
+          <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
+            <h3 className="font-semibold text-sm capitalize">{sidePanel.type} Details</h3>
+            <button onClick={() => setSidePanel(null)} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="p-4 space-y-3">
+            {sidePanel.type === 'incident' && (
+              <>
+                <div className="flex items-center gap-2">
+                  <span className={`w-3 h-3 rounded-full ${STATUS_COLORS[sidePanel.data.status] ? '' : ''}`} style={{ backgroundColor: STATUS_COLORS[sidePanel.data.status] }} />
+                  <span className="text-sm font-medium capitalize">{sidePanel.data.type}</span>
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 dark:bg-gray-700">Sev {sidePanel.data.severity}</span>
+                </div>
+                <p className="text-sm text-gray-600 dark:text-gray-400">{sidePanel.data.description}</p>
+                <p className="text-xs text-gray-500">Area: {sidePanel.data.areaId}</p>
+                <p className="text-xs text-gray-500">Status: {sidePanel.data.status}</p>
+                <p className="text-xs text-gray-500">Assigned: {sidePanel.data.responderName || 'Unassigned'}</p>
+              </>
+            )}
+            {sidePanel.type === 'volunteer' && (
+              <>
+                <p className="text-sm font-medium">{sidePanel.data.username}</p>
+                <p className="text-xs text-gray-500">Role: {sidePanel.data.role}</p>
+                <p className="text-xs text-gray-500">Status: {sidePanel.data.availability}</p>
+                <p className="text-xs text-gray-500">Active tasks: {sidePanel.data.active_tasks}</p>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* No mapbox token fallback - data summary */}
+      {!mapboxgl.accessToken && (
+        <div className="absolute inset-0 flex items-center justify-center bg-gray-100 dark:bg-gray-900">
+          <div className="text-center space-y-4 max-w-md">
+            <Layers className="w-12 h-12 text-gray-400 mx-auto" />
+            <h2 className="text-lg font-semibold">Map Requires Mapbox Token</h2>
+            <p className="text-sm text-gray-500">Add <code className="bg-gray-200 dark:bg-gray-700 px-1.5 py-0.5 rounded text-xs">VITE_MAPBOX_TOKEN=your_token</code> to the <code className="bg-gray-200 dark:bg-gray-700 px-1.5 py-0.5 rounded text-xs">.env</code> file</p>
+            <div className="grid grid-cols-3 gap-3 mt-4">
+              <div className="bg-white dark:bg-gray-800 p-3 rounded-lg border border-gray-200 dark:border-gray-700">
+                <p className="text-xl font-bold">{incidents.length}</p>
+                <p className="text-xs text-gray-500">Incidents</p>
+              </div>
+              <div className="bg-white dark:bg-gray-800 p-3 rounded-lg border border-gray-200 dark:border-gray-700">
+                <p className="text-xl font-bold">{volunteers.length}</p>
+                <p className="text-xs text-gray-500">Volunteers</p>
+              </div>
+              <div className="bg-white dark:bg-gray-800 p-3 rounded-lg border border-gray-200 dark:border-gray-700">
+                <p className="text-xl font-bold">{resources.length}</p>
+                <p className="text-xs text-gray-500">Resources</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}

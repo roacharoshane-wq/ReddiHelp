@@ -1,0 +1,29 @@
+@import "tailwindcss";
+
+:root {
+  --sidebar-width: 240px;
+  --sidebar-collapsed: 64px;
+  --topbar-height: 56px;
+}
+
+body { margin: 0; font-family: 'Inter', system-ui, -apple-system, sans-serif; }
+.dark { color-scheme: dark; }
+.mapboxgl-ctrl-attrib { display:none !important; }
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(1.8); }
+}
+.pulse-dot { animation: pulse-dot 2s ease-in-out infinite; }
+
+@keyframes flash-highlight {
+  0% { background-color: rgba(16,185,129,0.3); }
+  100% { background-color: transparent; }
+}
+.flash-highlight { animation: flash-highlight 1.5s ease-out; }
+
+@keyframes flash-red {
+  0% { background-color: rgba(239,68,68,0.3); }
+  100% { background-color: transparent; }
+}
+.flash-red { animation: flash-red 1.5s ease-out; } 
