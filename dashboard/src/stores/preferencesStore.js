@@ -6,7 +6,7 @@ export const usePreferencesStore = create(
     (set) => ({
       darkMode: false,
       sidebarCollapsed: false,
-      mapStyle: 'dark-v11',
+      mapStyle: 'streets-v12',
       layerVisibility: { incidents: true, volunteers: true, resources: false, heatmap: false, coverage: false },
       incidentFilters: { statuses: [], types: [], timeRange: 'all', search: '' },
       selectedIncidentId: null,

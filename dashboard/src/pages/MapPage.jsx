@@ -63,6 +63,24 @@ const BASEMAP_PROVIDERS = [
   { key: 'esri', label: 'Esri', style: ESRI_STYLE },
 ]
 
+const MAPBOX_STYLE_OPTIONS = [
+  { id: 'streets-v12', label: 'streets' },
+  { id: 'outdoors-v12', label: 'outdoors' },
+  { id: 'satellite-streets-v12', label: 'satellite' },
+]
+
+const LEGACY_STYLE_MAP = {
+  'dark-v11': 'streets-v12',
+  'light-v11': 'streets-v12',
+}
+
+const MAPBOX_STYLE_IDS = new Set(MAPBOX_STYLE_OPTIONS.map((s) => s.id))
+
+function normalizeMapboxStyle(style) {
+  const mapped = LEGACY_STYLE_MAP[style] || style
+  return MAPBOX_STYLE_IDS.has(mapped) ? mapped : 'streets-v12'
+}
+
 const SEVERITY_COLORS = ['#22c55e', '#eab308', '#f97316', '#ef4444', '#991b1b']
 const STATUS_COLORS = { active: '#ef4444', 'in-progress': '#f97316', assigned: '#eab308', resolved: '#22c55e', submitted: '#9ca3af' }
 
@@ -85,7 +103,8 @@ export default function MapPage() {
   const [showLayers, setShowLayers] = useState(false)
   const [sidePanel, setSidePanel] = useState(null)
   const socket = useSocketStore((s) => s.socket)
-  const { layerVisibility, setLayerVisibility, mapStyle } = usePreferencesStore()
+  const { layerVisibility, setLayerVisibility, mapStyle, setMapStyle } = usePreferencesStore()
+  const normalizedMapStyle = normalizeMapboxStyle(mapStyle)
 
   const { data: incidents = [] } = useQuery({
     queryKey: ['incidents'],
@@ -116,6 +135,10 @@ export default function MapPage() {
   useEffect(() => {
     resourcesRef.current = resources
   }, [resources])
+
+  useEffect(() => {
+    if (mapStyle !== normalizedMapStyle) setMapStyle(normalizedMapStyle)
+  }, [mapStyle, normalizedMapStyle, setMapStyle])
 
   // Determine active parish for volunteer/coordinator
   useEffect(() => {
@@ -253,7 +276,7 @@ export default function MapPage() {
 
     const getProvider = () => BASEMAP_PROVIDERS[providerIndex]
     const resolveProviderStyle = (provider) => {
-      if (provider.style === 'mapbox') return `mapbox://styles/mapbox/${mapStyle}`
+      if (provider.style === 'mapbox') return `mapbox://styles/mapbox/${normalizedMapStyle}`
       return provider.style
     }
 
@@ -588,16 +611,18 @@ export default function MapPage() {
 
       {/* Style switcher */}
       <div className="absolute top-3 right-14 z-10 flex gap-1 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 p-1">
-        {['dark-v11', 'light-v11', 'satellite-streets-v12'].map((s) => (
+        {MAPBOX_STYLE_OPTIONS.map((styleOpt) => (
           <button
-            key={s}
+            key={styleOpt.id}
             disabled={mapTokenIssue}
             onClick={() => {
-              if (mapRef.current && !mapTokenIssue) mapRef.current.setStyle(`mapbox://styles/mapbox/${s}`)
+              if (!mapRef.current || mapTokenIssue) return
+              setMapStyle(styleOpt.id)
+              mapRef.current.setStyle(`mapbox://styles/mapbox/${styleOpt.id}`)
             }}
-            className={`px-2 py-1 text-[10px] rounded font-medium ${mapStyle === s ? 'bg-teal-100 dark:bg-teal-900/40 text-teal-700' : 'text-gray-500 hover:text-gray-700'} ${mapTokenIssue ? 'opacity-50 cursor-not-allowed' : ''}`}
+            className={`px-2 py-1 text-[10px] rounded font-medium ${normalizedMapStyle === styleOpt.id ? 'bg-teal-100 dark:bg-teal-900/40 text-teal-700' : 'text-gray-500 hover:text-gray-700'} ${mapTokenIssue ? 'opacity-50 cursor-not-allowed' : ''}`}
           >
-            {s.split('-')[0]}
+            {styleOpt.label}
           </button>
         ))}
       </div>
