@@ -4,6 +4,9 @@ import { useSocketStore } from '../stores/socketStore'
 import { useAuthStore } from '../stores/authStore'
 
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL
+if (!SOCKET_URL) {
+    console.error("CRITICAL: VITE_SOCKET_URL is undefined. Check Render Env Vars.");
+}
 
 export function useSocket() {
   const { socket, setSocket, setConnected } = useSocketStore()
