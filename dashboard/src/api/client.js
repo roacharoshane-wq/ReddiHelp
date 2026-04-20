@@ -1,18 +1,44 @@
 import { useAuthStore } from '../stores/authStore'
 
-const BASE = '/api'
+const RAW_API_URL = (import.meta.env.VITE_API_URL || '').trim()
+
+function normalizeApiBase(rawApiUrl) {
+  if (!rawApiUrl) return '/api'
+
+  const trimmed = rawApiUrl.replace(/\/+$/, '')
+  if (trimmed === '/api' || trimmed.endsWith('/api')) return trimmed
+
+  return `${trimmed}/api`
+}
+
+const BASE = normalizeApiBase(RAW_API_URL)
+
+function normalizeApiPath(path = '') {
+  if (/^https?:\/\//i.test(path)) return path
+
+  const withLeadingSlash = path.startsWith('/') ? path : `/${path}`
+  if (withLeadingSlash === '/api') return ''
+  if (withLeadingSlash.startsWith('/api/')) return withLeadingSlash.slice(4)
+
+  return withLeadingSlash
+}
+
+export function resolveApiUrl(path = '') {
+  if (/^https?:\/\//i.test(path)) return path
+  return `${BASE}${normalizeApiPath(path)}`
+}
 
 async function request(path, options = {}) {
   const token = useAuthStore.getState().accessToken
   const headers = { 'Content-Type': 'application/json', ...options.headers }
   if (token) headers['Authorization'] = `Bearer ${token}`
 
-  let res = await fetch(`${BASE}${path}`, { ...options, headers })
+  let res = await fetch(resolveApiUrl(path), { ...options, headers })
 
   if (res.status === 401) {
     const refreshToken = useAuthStore.getState().refreshToken
     if (refreshToken) {
-      const refreshRes = await fetch(`${BASE}/auth/refresh`, {
+      const refreshRes = await fetch(resolveApiUrl('/auth/refresh'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refreshToken }),
@@ -21,7 +47,7 @@ async function request(path, options = {}) {
         const { accessToken } = await refreshRes.json()
         useAuthStore.getState().setAccessToken(accessToken)
         headers['Authorization'] = `Bearer ${accessToken}`
-        res = await fetch(`${BASE}${path}`, { ...options, headers })
+        res = await fetch(resolveApiUrl(path), { ...options, headers })
       } else {
         useAuthStore.getState().logout()
         window.location.href = '/login'

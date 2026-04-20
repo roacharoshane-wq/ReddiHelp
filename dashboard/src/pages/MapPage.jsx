@@ -14,50 +14,7 @@ const STATUS_COLORS = { active: '#ef4444', 'in-progress': '#f97316', assigned: '
 
 export default function MapPage() {
   const user = useAuthStore((s) => s.user)
-    // Determine active parish for volunteer/coordinator
-    const [activeParish, setActiveParish] = useState(null)
-    useEffect(() => {
-      if (!user || (user.role !== 'volunteer' && user.role !== 'coordinator')) {
-        setActiveParish(null)
-        return
-      }
-      // Find user's parish by matching their last_lat/last_lon to a parish center (approximate)
-      // Or, if user has areaId/parish property, use that
-      // For demo, use volunteers list if user is volunteer
-      let lat = user.last_lat, lon = user.last_lon
-      if (!lat || !lon) {
-        // Try to find in volunteers list
-        const v = volunteers.find(v => v.id === user.id)
-        if (v) { lat = v.last_lat; lon = v.last_lon }
-      }
-      if (lat && lon) {
-        // Find closest parish
-        const parishList = [
-          { name: 'Kingston',        lat: 17.9712, lon: -76.7936 },
-          { name: 'Saint Andrew',    lat: 18.0800, lon: -76.7800 },
-          { name: 'Saint Thomas',    lat: 17.9200, lon: -76.3500 },
-          { name: 'Portland',        lat: 18.1500, lon: -76.4200 },
-          { name: 'Saint Mary',      lat: 18.3700, lon: -76.9000 },
-          { name: 'Saint Ann',       lat: 18.4300, lon: -77.2000 },
-          { name: 'Trelawny',        lat: 18.3500, lon: -77.6500 },
-          { name: 'Saint James',     lat: 18.4700, lon: -77.9200 },
-          { name: 'Hanover',         lat: 18.4000, lon: -78.1300 },
-          { name: 'Westmoreland',    lat: 18.2200, lon: -78.1000 },
-          { name: 'Saint Elizabeth', lat: 18.0500, lon: -77.7000 },
-          { name: 'Manchester',      lat: 18.0500, lon: -77.5000 },
-          { name: 'Clarendon',       lat: 17.9500, lon: -77.2000 },
-          { name: 'Saint Catherine', lat: 18.0500, lon: -77.0500 },
-        ]
-        let minDist = Infinity, closest = null
-        for (const p of parishList) {
-          const d = Math.sqrt(Math.pow(p.lat - lat, 2) + Math.pow(p.lon - lon, 2))
-          if (d < minDist) { minDist = d; closest = p }
-        }
-        setActiveParish(closest ? closest.name : null)
-      } else {
-        setActiveParish(null)
-      }
-    }, [user, volunteers])
+  const [activeParish, setActiveParish] = useState(null)
   const mapContainer = useRef(null)
   const mapRef = useRef(null)
   const [mapLoaded, setMapLoaded] = useState(false)
@@ -83,6 +40,58 @@ export default function MapPage() {
     queryFn: () => api.get('/resources'),
     refetchInterval: 60000,
   })
+
+  // Determine active parish for volunteer/coordinator
+  useEffect(() => {
+    if (!user || (user.role !== 'volunteer' && user.role !== 'coordinator')) {
+      setActiveParish(null)
+      return
+    }
+    // Find user's parish by matching their last_lat/last_lon to a parish center (approximate)
+    // Or, if user has areaId/parish property, use that
+    // For demo, use volunteers list if user is volunteer
+    let lat = user.last_lat
+    let lon = user.last_lon
+    if (!lat || !lon) {
+      // Try to find in volunteers list
+      const v = volunteers.find((vol) => vol.id === user.id)
+      if (v) {
+        lat = v.last_lat
+        lon = v.last_lon
+      }
+    }
+    if (lat && lon) {
+      // Find closest parish
+      const parishList = [
+        { name: 'Kingston', lat: 17.9712, lon: -76.7936 },
+        { name: 'Saint Andrew', lat: 18.08, lon: -76.78 },
+        { name: 'Saint Thomas', lat: 17.92, lon: -76.35 },
+        { name: 'Portland', lat: 18.15, lon: -76.42 },
+        { name: 'Saint Mary', lat: 18.37, lon: -76.9 },
+        { name: 'Saint Ann', lat: 18.43, lon: -77.2 },
+        { name: 'Trelawny', lat: 18.35, lon: -77.65 },
+        { name: 'Saint James', lat: 18.47, lon: -77.92 },
+        { name: 'Hanover', lat: 18.4, lon: -78.13 },
+        { name: 'Westmoreland', lat: 18.22, lon: -78.1 },
+        { name: 'Saint Elizabeth', lat: 18.05, lon: -77.7 },
+        { name: 'Manchester', lat: 18.05, lon: -77.5 },
+        { name: 'Clarendon', lat: 17.95, lon: -77.2 },
+        { name: 'Saint Catherine', lat: 18.05, lon: -77.05 },
+      ]
+      let minDist = Infinity
+      let closest = null
+      for (const p of parishList) {
+        const d = Math.sqrt(Math.pow(p.lat - lat, 2) + Math.pow(p.lon - lon, 2))
+        if (d < minDist) {
+          minDist = d
+          closest = p
+        }
+      }
+      setActiveParish(closest ? closest.name : null)
+    } else {
+      setActiveParish(null)
+    }
+  }, [user, volunteers])
 
   // Initialize map
   useEffect(() => {

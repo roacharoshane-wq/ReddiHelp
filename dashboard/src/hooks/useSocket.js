@@ -3,9 +3,18 @@ import { io } from 'socket.io-client'
 import { useSocketStore } from '../stores/socketStore'
 import { useAuthStore } from '../stores/authStore'
 
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL
+const SOCKET_URL = (() => {
+  const socketUrl = (import.meta.env.VITE_SOCKET_URL || '').trim()
+  if (socketUrl) return socketUrl.replace(/\/+$/, '')
+
+  const apiUrl = (import.meta.env.VITE_API_URL || '').trim().replace(/\/+$/, '')
+  if (apiUrl) return apiUrl.replace(/\/api$/, '')
+
+  return typeof window !== 'undefined' ? window.location.origin : ''
+})()
+
 if (!SOCKET_URL) {
-    console.error("CRITICAL: VITE_SOCKET_URL is undefined. Check Render Env Vars.");
+  console.error('CRITICAL: Unable to resolve socket URL. Check VITE_SOCKET_URL and VITE_API_URL.')
 }
 
 export function useSocket() {
@@ -13,7 +22,7 @@ export function useSocket() {
   const accessToken = useAuthStore((s) => s.accessToken)
 
   useEffect(() => {
-    if (socket) return
+    if (!SOCKET_URL || socket) return
 
     const s = io(SOCKET_URL, {
       auth: { token: accessToken },

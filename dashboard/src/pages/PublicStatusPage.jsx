@@ -1,8 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { Shield, AlertTriangle, Users, Activity, Radio } from 'lucide-react'
-
-const API = import.meta.env.VITE_API_URL || ''
+import { resolveApiUrl } from '../api/client'
 
 export default function PublicStatusPage() {
   const [lastUpdate, setLastUpdate] = useState(new Date())
@@ -10,7 +9,7 @@ export default function PublicStatusPage() {
   const { data: status, isLoading } = useQuery({
     queryKey: ['public-status'],
     queryFn: async () => {
-      const res = await fetch(`${API}/api/public/status`)
+      const res = await fetch(resolveApiUrl('/public/status'))
       if (!res.ok) throw new Error('Failed to load')
       return res.json()
     },

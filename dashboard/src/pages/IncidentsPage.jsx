@@ -34,6 +34,36 @@ export default function IncidentsPage() {
     refetchInterval: 30000,
   })
 
+  // Filter and sort
+  const filtered = useMemo(() => {
+    let result = [...incidents]
+    if (filters.statuses.length > 0) result = result.filter((i) => filters.statuses.includes(i.status))
+    if (filters.types.length > 0) result = result.filter((i) => filters.types.includes(i.type))
+    if (filters.search) {
+      const s = filters.search.toLowerCase()
+      result = result.filter((i) => (i.description || '').toLowerCase().includes(s) || (i.areaId || '').toLowerCase().includes(s) || String(i.id).includes(s))
+    }
+    if (filters.timeRange !== 'all') {
+      const hours = { '1h': 1, '6h': 6, '24h': 24 }[filters.timeRange] || 9999
+      const cutoff = new Date(Date.now() - hours * 3600000)
+      result = result.filter((i) => new Date(i.timestamp) > cutoff)
+    }
+
+    if (sortBy === 'default') {
+      result.sort((a, b) => {
+        const aUnassigned = !a.assignedTo ? 0 : 1
+        const bUnassigned = !b.assignedTo ? 0 : 1
+        if (aUnassigned !== bUnassigned) return aUnassigned - bUnassigned
+        if (b.severity !== a.severity) return b.severity - a.severity
+        return new Date(a.timestamp) - new Date(b.timestamp)
+      })
+    } else if (sortBy === 'severity') result.sort((a, b) => b.severity - a.severity)
+    else if (sortBy === 'time') result.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+    else if (sortBy === 'status') result.sort((a, b) => a.status.localeCompare(b.status))
+
+    return result
+  }, [incidents, filters, sortBy])
+
   // Socket.io real-time
   useEffect(() => {
     if (!socket) return
@@ -73,36 +103,6 @@ export default function IncidentsPage() {
       window.removeEventListener('kb:escalate-incident', handleEscalate)
     }
   }, [filtered, expandedId, queryClient])
-
-  // Filter and sort
-  const filtered = useMemo(() => {
-    let result = [...incidents]
-    if (filters.statuses.length > 0) result = result.filter((i) => filters.statuses.includes(i.status))
-    if (filters.types.length > 0) result = result.filter((i) => filters.types.includes(i.type))
-    if (filters.search) {
-      const s = filters.search.toLowerCase()
-      result = result.filter((i) => (i.description || '').toLowerCase().includes(s) || (i.areaId || '').toLowerCase().includes(s) || String(i.id).includes(s))
-    }
-    if (filters.timeRange !== 'all') {
-      const hours = { '1h': 1, '6h': 6, '24h': 24 }[filters.timeRange] || 9999
-      const cutoff = new Date(Date.now() - hours * 3600000)
-      result = result.filter((i) => new Date(i.timestamp) > cutoff)
-    }
-
-    if (sortBy === 'default') {
-      result.sort((a, b) => {
-        const aUnassigned = !a.assignedTo ? 0 : 1
-        const bUnassigned = !b.assignedTo ? 0 : 1
-        if (aUnassigned !== bUnassigned) return aUnassigned - bUnassigned
-        if (b.severity !== a.severity) return b.severity - a.severity
-        return new Date(a.timestamp) - new Date(b.timestamp)
-      })
-    } else if (sortBy === 'severity') result.sort((a, b) => b.severity - a.severity)
-    else if (sortBy === 'time') result.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
-    else if (sortBy === 'status') result.sort((a, b) => a.status.localeCompare(b.status))
-
-    return result
-  }, [incidents, filters, sortBy])
 
   const toggleFilter = (key, val) => {
     setFilters((f) => {
