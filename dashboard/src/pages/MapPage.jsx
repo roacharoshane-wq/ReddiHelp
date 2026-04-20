@@ -113,6 +113,7 @@ export default function MapPage() {
   useEffect(() => {
     if (mapRef.current || !mapContainer.current) return
     let fallbackApplied = !MAPBOX_TOKEN
+    let initialStyleReady = fallbackApplied
 
     const map = new mapboxgl.Map({
       container: mapContainer.current,
@@ -121,19 +122,41 @@ export default function MapPage() {
       zoom: 9,
     })
 
+    const applyFallbackStyle = () => {
+      if (fallbackApplied) return
+      fallbackApplied = true
+      setMapTokenIssue(true)
+      map.setStyle(FALLBACK_STYLE)
+    }
+
+    // If the initial mapbox style never completes, force fallback so users still see a basemap.
+    const startupFallbackTimer = setTimeout(() => {
+      if (!initialStyleReady) applyFallbackStyle()
+    }, 5000)
+
     map.addControl(new mapboxgl.NavigationControl(), 'top-right')
 
     map.on('error', (event) => {
-      const msg = event?.error?.message || ''
-      const isTokenIssue = /access token|unauthorized|forbidden|401|403/i.test(msg)
-      if (!fallbackApplied && isTokenIssue) {
-        fallbackApplied = true
-        setMapTokenIssue(true)
-        map.setStyle(FALLBACK_STYLE)
-      }
+      const msg = String(event?.error?.message || '').toLowerCase()
+      const startupMapboxFailure =
+        msg.includes('mapbox') ||
+        msg.includes('access token') ||
+        msg.includes('unauthorized') ||
+        msg.includes('forbidden') ||
+        msg.includes('request failed') ||
+        msg.includes('failed to fetch') ||
+        msg.includes('sprite') ||
+        msg.includes('glyph') ||
+        msg.includes('401') ||
+        msg.includes('403')
+
+      if (!initialStyleReady && startupMapboxFailure) applyFallbackStyle()
     })
 
     map.on('load', () => {
+      initialStyleReady = true
+      clearTimeout(startupFallbackTimer)
+
       // Incidents source
       map.addSource('incidents', { type: 'geojson', data: { type: 'FeatureCollection', features: [] }, cluster: true, clusterMaxZoom: 14, clusterRadius: 50 })
       map.addLayer({ id: 'incident-clusters', type: 'circle', source: 'incidents', filter: ['has', 'point_count'], paint: { 'circle-color': ['step', ['get', 'point_count'], '#51bbd6', 10, '#f1f075', 30, '#f28cb1'], 'circle-radius': ['step', ['get', 'point_count'], 18, 10, 24, 30, 32] } })
@@ -206,7 +229,11 @@ export default function MapPage() {
     })
 
     mapRef.current = map
-    return () => { map.remove(); mapRef.current = null }
+    return () => {
+      clearTimeout(startupFallbackTimer)
+      map.remove()
+      mapRef.current = null
+    }
   }, [])
 
   // Update incident data
