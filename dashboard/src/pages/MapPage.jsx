@@ -437,6 +437,7 @@ export default function MapPage() {
       const lower = message.toLowerCase()
       const sourceId = String(event?.sourceId || event?.source?.id || '').toLowerCase()
       const tileUrl = event?.tile?.request?.url || event?.source?.tiles?.[0] || event?.source?.url || ''
+      const activeProvider = getProvider()
 
       setMapDiagnostics((prev) => ({
         ...prev,
@@ -457,6 +458,10 @@ export default function MapPage() {
         lower.includes('glyph') ||
         lower.includes('tile')
 
+      const mapboxAuthFailure =
+        activeProvider.key === 'mapbox' &&
+        (lower.includes('401') || lower.includes('403') || lower.includes('access token') || lower.includes('unauthorized') || lower.includes('forbidden') || String(tileUrl).includes('api.mapbox.com'))
+
       const basemapSourceFailure =
         sourceId.includes('composite') ||
         sourceId.includes('mapbox') ||
@@ -464,7 +469,7 @@ export default function MapPage() {
         sourceId.includes('carto') ||
         sourceId.includes('esri')
 
-      const shouldFailover = networkFailure && (!initialStyleReady || basemapSourceFailure)
+      const shouldFailover = (mapboxAuthFailure || networkFailure) && (!initialStyleReady || basemapSourceFailure || activeProvider.key === 'mapbox')
       const failoverCooldownElapsed = Date.now() - lastFailoverAt > 1000
 
       if (shouldFailover && failoverCooldownElapsed) {
