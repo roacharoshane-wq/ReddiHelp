@@ -9,17 +9,128 @@ const path = require('path');
 const os = require('os');
 require('dotenv').config();
 
+const NODE_ENV = process.env.NODE_ENV || 'development';
+const IS_PRODUCTION = NODE_ENV === 'production';
+const MOCK_AUTH = process.env.MOCK_AUTH === 'true';
+const TESTING_MODE = process.env.TESTING_MODE !== 'false';
+
+function parseBoolean(rawValue, defaultValue = false) {
+  if (rawValue === undefined || rawValue === null || rawValue === '') {
+    return defaultValue;
+  }
+
+  const normalized = String(rawValue).trim().toLowerCase();
+  return ['1', 'true', 'yes', 'on'].includes(normalized);
+}
+
+function parseAllowedOrigins(rawValue) {
+  if (!rawValue) return [];
+  return rawValue
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+}
+
+const configuredCorsOrigins = parseAllowedOrigins(
+  process.env.CORS_ORIGINS || process.env.CORS_ORIGIN || (IS_PRODUCTION ? '' : '*')
+);
+const allowAllCorsOrigins = configuredCorsOrigins.includes('*');
+const BOOTSTRAP_ADMIN_ENABLED =
+  parseBoolean(
+    process.env.BOOTSTRAP_ADMIN_ENABLED ?? process.env.BOOTSTRAP_ADMIN,
+    !IS_PRODUCTION
+  );
+const BOOTSTRAP_ADMIN_USERNAME =
+  process.env.BOOTSTRAP_ADMIN_USERNAME || process.env.BOOTSTRAP_ADMIN_USER || 'admin';
+const BOOTSTRAP_ADMIN_PHONE = process.env.BOOTSTRAP_ADMIN_PHONE || '+18761234567';
+const BOOTSTRAP_ADMIN_PASSWORD = process.env.BOOTSTRAP_ADMIN_PASSWORD || 'admin123';
+
+function validateProductionConfig() {
+  if (!IS_PRODUCTION) return;
+
+  const missingVars = [];
+  if (!process.env.DATABASE_URL) missingVars.push('DATABASE_URL');
+  if (!process.env.ACCESS_TOKEN_SECRET) missingVars.push('ACCESS_TOKEN_SECRET');
+  if (!process.env.REFRESH_TOKEN_SECRET) missingVars.push('REFRESH_TOKEN_SECRET');
+
+  if (missingVars.length > 0) {
+    throw new Error(
+      `Missing required production environment variables: ${missingVars.join(', ')}`
+    );
+  }
+
+  const weakSecrets = [];
+  if (process.env.ACCESS_TOKEN_SECRET === 'access-secret') {
+    weakSecrets.push('ACCESS_TOKEN_SECRET');
+  }
+  if (process.env.REFRESH_TOKEN_SECRET === 'refresh-secret') {
+    weakSecrets.push('REFRESH_TOKEN_SECRET');
+  }
+
+  if (weakSecrets.length > 0) {
+    throw new Error(
+      `Weak JWT secret defaults are not allowed in production: ${weakSecrets.join(', ')}`
+    );
+  }
+
+  if (MOCK_AUTH) {
+    throw new Error('MOCK_AUTH must be false in production');
+  }
+
+  if (TESTING_MODE) {
+    throw new Error('TESTING_MODE must be false in production');
+  }
+
+  if (allowAllCorsOrigins || configuredCorsOrigins.length === 0) {
+    throw new Error(
+      'Set CORS_ORIGINS (comma-separated) to explicit origins in production; wildcard is not allowed'
+    );
+  }
+
+  if (BOOTSTRAP_ADMIN_ENABLED && BOOTSTRAP_ADMIN_PASSWORD === 'admin123') {
+    throw new Error(
+      'BOOTSTRAP_ADMIN_PASSWORD must be changed when BOOTSTRAP_ADMIN_ENABLED=true in production'
+    );
+  }
+}
+
+validateProductionConfig();
+
+const corsOptions = {
+  origin(origin, callback) {
+    if (!origin || allowAllCorsOrigins || configuredCorsOrigins.includes(origin)) {
+      callback(null, true);
+      return;
+    }
+
+    callback(new Error(`Not allowed by CORS: ${origin}`));
+  },
+  methods: ['GET', 'POST', 'PATCH', 'DELETE', 'PUT', 'OPTIONS'],
+  credentials: true,
+};
+
+const socketCorsOptions = {
+  origin(origin, callback) {
+    if (!origin || allowAllCorsOrigins || configuredCorsOrigins.includes(origin)) {
+      callback(null, true);
+      return;
+    }
+
+    callback(new Error(`Not allowed by Socket.io CORS: ${origin}`));
+  },
+  methods: ['GET', 'POST', 'PATCH', 'DELETE', 'PUT', 'OPTIONS'],
+  credentials: true,
+};
+
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
-  cors: { origin: '*', methods: ['GET', 'POST', 'PATCH', 'DELETE'] }
+  cors: socketCorsOptions
 });
 
-app.use(cors());
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-const MOCK_AUTH = process.env.MOCK_AUTH === 'true';
 
 // Mock auth middleware — sets req.user when MOCK_AUTH=true
 if (MOCK_AUTH) {
@@ -44,6 +155,9 @@ const VONAGE_API_KEY = process.env.VONAGE_API_KEY;
 const VONAGE_API_SECRET = process.env.VONAGE_API_SECRET;
 const VONAGE_FROM = process.env.VONAGE_FROM || 'ReddiHelp';
 const MAPBOX_TOKEN = process.env.MAPBOX_ACCESS_TOKEN || process.env.VITE_MAPBOX_TOKEN || '';
+const UPLOAD_DIR = process.env.UPLOAD_DIR && process.env.UPLOAD_DIR.trim()
+  ? path.resolve(process.env.UPLOAD_DIR.trim())
+  : path.join(__dirname, 'uploads');
 
 async function sendSMS(to, text) {
   if (!VONAGE_API_KEY || !VONAGE_API_SECRET) {
@@ -137,6 +251,7 @@ async function ensureDatabaseExists() {
         role VARCHAR(20) NOT NULL,
         organisation_id INTEGER,
         skills JSONB,
+        resources JSONB,
         location GEOGRAPHY(POINT),
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
@@ -327,6 +442,7 @@ async function ensureDatabaseExists() {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS vehicle VARCHAR(20);
       ALTER TABLE users ADD COLUMN IF NOT EXISTS availability VARCHAR(20) DEFAULT 'available';
       ALTER TABLE users ADD COLUMN IF NOT EXISTS languages JSONB;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS resources JSONB;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS last_lat DOUBLE PRECISION;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS last_lon DOUBLE PRECISION;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS last_location_at TIMESTAMPTZ;
@@ -433,15 +549,21 @@ async function ensureDatabaseExists() {
 
     console.log('✅ Database connected and all tables ensured');
 
-    // Insert a default coordinator user if missing (used in MOCK_AUTH mode)
-    await pgPool.query(`
-      INSERT INTO users (id, phone, role, username, password_hash)
-      VALUES (1, '+18761234567', 'coordinator', 'admin', 'admin123')
-      ON CONFLICT (id) DO UPDATE
-        SET username = EXCLUDED.username,
-            password_hash = COALESCE(users.password_hash, EXCLUDED.password_hash);
-    `);
-    console.log('👤 Default admin user ensured (id=1, username=admin)');
+    if (BOOTSTRAP_ADMIN_ENABLED) {
+      // Optional local/dev bootstrap account for first coordinator login.
+      await pgPool.query(
+        `INSERT INTO users (id, phone, role, username, password_hash)
+         VALUES (1, $1, 'coordinator', $2, $3)
+         ON CONFLICT (id) DO UPDATE
+           SET phone = COALESCE(users.phone, EXCLUDED.phone),
+               username = COALESCE(users.username, EXCLUDED.username),
+               password_hash = COALESCE(users.password_hash, EXCLUDED.password_hash)`,
+        [BOOTSTRAP_ADMIN_PHONE, BOOTSTRAP_ADMIN_USERNAME, BOOTSTRAP_ADMIN_PASSWORD]
+      );
+      console.log(`👤 Bootstrap admin user ensured (id=1, username=${BOOTSTRAP_ADMIN_USERNAME})`);
+    } else {
+      console.log('👤 Bootstrap admin user disabled');
+    }
   } catch (err) {
     console.error('❌ Database init error:', err);
     if (err && err.code === '42501') {
@@ -525,7 +647,6 @@ app.post('/api/auth/verify-otp', async (req, res) => {
   const { phone, otp, role = 'victim' } = req.body;
 
   // TESTING_MODE accepts any 6-digit OTP. Set TESTING_MODE=false in .env for production.
-  const TESTING_MODE = process.env.TESTING_MODE !== 'false';
 
   if (!TESTING_MODE) {
     const result = await pgPool.query(
@@ -1531,6 +1652,10 @@ app.patch('/api/users/:id/profile', async (req, res) => {
     updates.push(`languages = $${paramIndex++}`);
     values.push(JSON.stringify(languages));
   }
+  if (resources !== undefined) {
+    updates.push(`resources = $${paramIndex++}`);
+    values.push(JSON.stringify(resources));
+  }
   if (active_location_lat !== undefined) {
     updates.push(`active_location_lat = $${paramIndex++}`);
     values.push(active_location_lat);
@@ -1559,7 +1684,7 @@ app.patch('/api/users/:id/profile', async (req, res) => {
 app.get('/api/users/:id/profile', async (req, res) => {
   const userId = parseInt(req.params.id);
   const result = await pgPool.query(
-    `SELECT id, phone, role, skills, vehicle, availability, languages,
+    `SELECT id, phone, role, skills, vehicle, availability, languages, resources,
             active_location_lat, active_location_lon, active_location_name,
             checked_in_at, check_in_station_name, check_in_station_parish,
             check_in_station_lat, check_in_station_lon
@@ -1741,6 +1866,19 @@ app.get('/api/volunteers/leaderboard', async (req, res) => {
 // ============================================================
 // Matching Engine — Volunteer → Incident by skills, distance, availability
 // ============================================================
+function normalizeParishName(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/parish of/g, '')
+    .replace(/parish/g, '')
+    .replace(/saint/g, 'st')
+    .replace(/\./g, '')
+    .replace(/_/g, ' ')
+    .replace(/[^a-z\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 app.get('/api/incidents/:id/match', authenticateToken, authorize('coordinator', 'admin'), async (req, res) => {
   const incidentId = parseInt(req.params.id);
   const maxDistance = parseInt(req.query.maxDistance) || 20000; // default 20km
@@ -1753,7 +1891,10 @@ app.get('/api/incidents/:id/match', authenticateToken, authorize('coordinator', 
     if (incident.rows.length === 0) return res.status(404).json({ error: 'Incident not found' });
 
     const inc = incident.rows[0];
+    const incidentParish = normalizeParishName(inc.area_id);
+    const incidentParish = normalizeParishName(inc.area_id);
     const incType = inc.type;
+    const incidentParish = normalizeParishName(inc.area_id);
 
     // Skill mapping: incident type → relevant skills
     const skillMap = {
@@ -1775,7 +1916,8 @@ app.get('/api/incidents/:id/match', authenticateToken, authorize('coordinator', 
 
     // Find available volunteers/responders within range, ordered by skill match + distance
     const candidates = await pgPool.query(
-      `SELECT u.id, u.phone, u.role, u.skills, u.vehicle, u.availability,
+      `SELECT u.id, u.phone, u.role, u.skills, u.resources, u.vehicle, u.availability,
+              u.active_location_name,
               u.last_lat, u.last_lon,
               ST_Distance(u.location, ST_GeogFromText($1)) as distance
        FROM users u
@@ -1799,6 +1941,9 @@ app.get('/api/incidents/:id/match', authenticateToken, authorize('coordinator', 
         userSkills.some(us => us.toLowerCase().includes(s.toLowerCase()))
       ).length;
 
+      const candidateParish = normalizeParishName(c.active_location_name);
+      const parishBoost = incidentParish && candidateParish && incidentParish === candidateParish ? 300 : 0;
+
       // Resource fulfillment: count how many needed resources are available
       let resourceFulfillment = 0;
       let resourceGap = 0;
@@ -1816,16 +1961,20 @@ app.get('/api/incidents/:id/match', authenticateToken, authorize('coordinator', 
         phone: c.phone,
         role: c.role,
         skills: c.skills,
+        resources: c.resources,
         vehicle: c.vehicle,
+        activeLocationName: c.active_location_name,
         distance: Math.round(c.distance),
         skillMatch,
         resourceFulfillment,
         resourceGap,
+        parishMatch: parishBoost > 0,
         score:
           skillMatch * 1000 +
           (maxDistance - Math.min(c.distance, maxDistance)) +
           resourceFulfillment * 500 -
-          resourceGap * 200,
+          resourceGap * 200 +
+          parishBoost,
       };
     });
 
@@ -1843,7 +1992,9 @@ app.get('/api/volunteers/list', authenticateToken, async (req, res) => {
   try {
     const result = await pgPool.query(
       `SELECT u.id, u.username, u.phone, u.role, u.availability,
-              u.skills, u.vehicle, u.languages, u.last_lat, u.last_lon, u.last_location_at,
+              u.skills, u.resources, u.vehicle, u.languages,
+              u.active_location_name,
+              u.last_lat, u.last_lon, u.last_location_at,
               (SELECT COUNT(*) FROM incidents WHERE assigned_to = u.id AND status IN ('active','in-progress')) as active_tasks,
               (SELECT COUNT(*) FROM incidents WHERE assigned_to = u.id AND status = 'resolved') as total_completed
        FROM users u
@@ -2223,11 +2374,10 @@ const multerAvailable = (() => { try { require.resolve('multer'); return true; }
 if (multerAvailable) {
   const multer = require('multer');
   const fs = require('fs');
-  const uploadDir = path.join(__dirname, 'uploads');
-  if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+  if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
   const storage = multer.diskStorage({
-    destination: uploadDir,
+    destination: UPLOAD_DIR,
     filename: (req, file, cb) => cb(null, `${Date.now()}_${file.originalname}`),
   });
   const upload = multer({ storage, limits: { fileSize: 10 * 1024 * 1024 } }); // 10MB limit
@@ -3053,8 +3203,8 @@ app.get('/api/incidents/:id/match-enhanced', authenticateToken, authorize('coord
     const relevantSkills = skillMap[inc.type] || [];
 
     const candidates = await pgPool.query(
-      `SELECT u.id, u.username, u.phone, u.role, u.skills, u.vehicle, u.availability,
-              u.last_lat, u.last_lon, u.active_location_lat, u.active_location_lon,
+      `SELECT u.id, u.username, u.phone, u.role, u.skills, u.resources, u.vehicle, u.availability,
+              u.last_lat, u.last_lon, u.active_location_lat, u.active_location_lon, u.active_location_name,
               ST_Distance(u.location, ST_GeogFromText($1)) as distance
        FROM users u
        WHERE u.role IN ('volunteer', 'responder')
@@ -3091,7 +3241,15 @@ app.get('/api/incidents/:id/match-enhanced', authenticateToken, authorize('coord
         if (activeLocDist <= 10000) activeLocBoost = 0.15;
       }
 
-      const confidence = Math.min(100, Math.round((distScore * 0.4 + skillScore * 0.3 + availScore * 0.2 + expScore * 0.1 + activeLocBoost) * 100));
+      const candidateParish = normalizeParishName(c.active_location_name);
+      const parishBoost = incidentParish && candidateParish && incidentParish === candidateParish ? 0.1 : 0;
+
+      const confidence = Math.min(
+        100,
+        Math.round(
+          (distScore * 0.4 + skillScore * 0.3 + availScore * 0.2 + expScore * 0.1 + activeLocBoost + parishBoost) * 100
+        )
+      );
 
       const reasoning = [];
       reasoning.push(`${(c.distance / 1000).toFixed(1)}km away`);
@@ -3099,6 +3257,7 @@ app.get('/api/incidents/:id/match-enhanced', authenticateToken, authorize('coord
       if (c.availability === 'available') reasoning.push('Currently available');
       if (exp > 0) reasoning.push(`Completed ${exp} similar tasks`);
       if (c.vehicle) reasoning.push(`Has ${c.vehicle}`);
+      if (parishBoost > 0) reasoning.push('Preferred parish match');
 
       return {
         userId: c.id,
@@ -3106,7 +3265,9 @@ app.get('/api/incidents/:id/match-enhanced', authenticateToken, authorize('coord
         phone: c.phone,
         role: c.role,
         skills: c.skills,
+        resources: c.resources,
         vehicle: c.vehicle,
+        activeLocationName: c.active_location_name,
         distance: Math.round(c.distance),
         confidence_score: confidence,
         reasoning,
@@ -3267,6 +3428,8 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`\n📋 Pages:`);
   console.log(`   🗺️  Map:       http://localhost:${PORT}/`);
   console.log(`   📊 Dashboard: http://localhost:${PORT}/incidents`);
-  console.log(`\n🔧 Mode: MOCK_AUTH=${MOCK_AUTH} | TESTING_MODE=${process.env.TESTING_MODE !== 'false'}`);
+  console.log(`\n🔧 Mode: NODE_ENV=${NODE_ENV} | MOCK_AUTH=${MOCK_AUTH} | TESTING_MODE=${TESTING_MODE}`);
+  console.log(`🔐 CORS origins: ${allowAllCorsOrigins ? '*' : configuredCorsOrigins.join(', ')}`);
+  console.log(`📁 Upload directory: ${UPLOAD_DIR}`);
   console.log('='.repeat(50) + '\n');
 });

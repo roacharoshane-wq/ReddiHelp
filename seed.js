@@ -47,6 +47,7 @@ async function ensureSchema(client) {
       role VARCHAR(20) NOT NULL,
       organisation_id INTEGER,
       skills JSONB,
+      resources JSONB,
       location GEOGRAPHY(POINT),
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
@@ -237,11 +238,15 @@ async function ensureSchema(client) {
     ALTER TABLE users ADD COLUMN IF NOT EXISTS vehicle VARCHAR(20);
     ALTER TABLE users ADD COLUMN IF NOT EXISTS availability VARCHAR(20) DEFAULT 'available';
     ALTER TABLE users ADD COLUMN IF NOT EXISTS languages JSONB;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS resources JSONB;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS last_lat DOUBLE PRECISION;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS last_lon DOUBLE PRECISION;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS last_location_at TIMESTAMPTZ;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS username VARCHAR(50) UNIQUE;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR(100);
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS active_location_lat DOUBLE PRECISION;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS active_location_lon DOUBLE PRECISION;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS active_location_name VARCHAR(100);
     ALTER TABLE incidents ADD COLUMN IF NOT EXISTS people_affected INTEGER;
     ALTER TABLE incidents ADD COLUMN IF NOT EXISTS reference_number VARCHAR(50);
     ALTER TABLE incidents ADD COLUMN IF NOT EXISTS source VARCHAR(20) DEFAULT 'app';
@@ -297,6 +302,17 @@ const resourceTypes = [
   { type: 'medical',     unit: 'kits',     baseQty: 500  },
   { type: 'shelter',     unit: 'spaces',   baseQty: 200  },
   { type: 'rescue_team', unit: 'teams',    baseQty: 15   },
+];
+
+const volunteerResourceOptions = [
+  'Vehicle (car/truck)',
+  'Boat',
+  'Generator',
+  'Medical kit',
+  'Food / Water supplies',
+  'Tent / Shelter',
+  'Communication equipment',
+  'Tools / Equipment',
 ];
 
 // -- User definitions (separated by role) ----------------------
@@ -355,6 +371,17 @@ function point(lon, lat) {
 
 function pick(arr) {
   return arr[Math.floor(Math.random() * arr.length)];
+}
+
+function pickSome(arr, minCount, maxCount) {
+  const count = Math.max(minCount, Math.floor(Math.random() * (maxCount - minCount + 1)) + minCount);
+  const pool = [...arr];
+  const chosen = [];
+  while (chosen.length < count && pool.length > 0) {
+    const index = Math.floor(Math.random() * pool.length);
+    chosen.push(pool.splice(index, 1)[0]);
+  }
+  return chosen;
 }
 
 function generatePhone() {
@@ -421,13 +448,28 @@ async function seedDatabase() {
         volunteerIndex++;
         const pt = randomPointNear(parish);
         const days = Math.floor(Math.random() * 60);
+        const resources = pickSome(volunteerResourceOptions, 2, 4);
         // Make username unique per parish
         const username = `${v.username}_${parish.name.replace(/\s/g, '').toLowerCase()}_${i+1}`;
         const { rows } = await client.query(
-          `INSERT INTO users (username, password_hash, phone, role, skills, location, created_at)
-           VALUES ($1, $2, $3, 'volunteer', $4::jsonb, ST_GeogFromText($5), NOW() - INTERVAL '${days} days')
+          `INSERT INTO users (username, password_hash, phone, role, skills, resources,
+                              active_location_name, active_location_lat, active_location_lon,
+                              location, created_at)
+           VALUES ($1, $2, $3, 'volunteer', $4::jsonb, $5::jsonb,
+                   $6, $7, $8,
+                   ST_GeogFromText($9), NOW() - INTERVAL '${days} days')
            RETURNING id`,
-          [username, v.password, generatePhone(), JSON.stringify(v.skills), point(pt.lon, pt.lat)]
+          [
+            username,
+            v.password,
+            generatePhone(),
+            JSON.stringify(v.skills),
+            JSON.stringify(resources),
+            parish.name,
+            parish.lat,
+            parish.lon,
+            point(pt.lon, pt.lat),
+          ]
         );
         volunteerIds.push(rows[0].id);
       }
@@ -441,11 +483,26 @@ async function seedDatabase() {
       const p = pick(parishes);
       const pt = randomPointNear(p);
       const days = Math.floor(Math.random() * 60);
+      const resources = pickSome(volunteerResourceOptions, 1, 3);
       const { rows } = await client.query(
-        `INSERT INTO users (username, password_hash, phone, role, skills, location, created_at)
-         VALUES ($1, $2, $3, 'responder', $4::jsonb, ST_GeogFromText($5), NOW() - INTERVAL '${days} days')
+        `INSERT INTO users (username, password_hash, phone, role, skills, resources,
+                            active_location_name, active_location_lat, active_location_lon,
+                            location, created_at)
+         VALUES ($1, $2, $3, 'responder', $4::jsonb, $5::jsonb,
+                 $6, $7, $8,
+                 ST_GeogFromText($9), NOW() - INTERVAL '${days} days')
          RETURNING id`,
-        [r.username, r.password, generatePhone(), JSON.stringify(r.skills), point(pt.lon, pt.lat)]
+        [
+          r.username,
+          r.password,
+          generatePhone(),
+          JSON.stringify(r.skills),
+          JSON.stringify(resources),
+          p.name,
+          p.lat,
+          p.lon,
+          point(pt.lon, pt.lat),
+        ]
       );
       responderIds.push(rows[0].id);
     }
@@ -731,18 +788,33 @@ async function seedDatabase() {
       { from: 'victim',      content: 'My neighbour is injured and cannot walk. Please bring a stretcher.' },
     ];
     let msgCount = 0;
-    // Create conversation threads for some incidents
-    const chatIncidents = incidentIds.slice(0, 8);
+    // Create conversation threads for some incidents (light seeding)
+    const chatIncidents = incidentIds.slice(0, 4);
+    const templatesByRole = {
+      victim: chatTemplates.filter(t => t.from === 'victim'),
+      volunteer: chatTemplates.filter(t => t.from === 'volunteer'),
+      responder: chatTemplates.filter(t => t.from === 'responder'),
+      coordinator: chatTemplates.filter(t => t.from === 'coordinator'),
+    };
     for (const incId of chatIncidents) {
-      const threadLength = 3 + Math.floor(Math.random() * 5);
-      for (let m = 0; m < threadLength; m++) {
-        const tmpl = chatTemplates[m % chatTemplates.length];
+      const threadLength = 3 + Math.floor(Math.random() * 4); // 3 to 6
+      const threadTemplates = [
+        pick(templatesByRole.victim),
+        pick(templatesByRole.coordinator),
+        pick(templatesByRole.volunteer),
+      ];
+      while (threadTemplates.length < threadLength) {
+        threadTemplates.push(pick(chatTemplates));
+      }
+
+      for (let m = 0; m < threadTemplates.length; m++) {
+        const tmpl = threadTemplates[m];
         let senderId;
         if (tmpl.from === 'victim')      senderId = pick(victimIds);
         else if (tmpl.from === 'volunteer')   senderId = pick(volunteerIds);
         else if (tmpl.from === 'responder')   senderId = pick(responderIds);
         else                                  senderId = pick(coordinatorIds);
-        const minsAgo = (threadLength - m) * (5 + Math.floor(Math.random() * 10));
+        const minsAgo = (threadTemplates.length - m) * (5 + Math.floor(Math.random() * 10));
         await client.query(
           `INSERT INTO messages (incident_id, sender_id, content, message_type, delivered, read, created_at)
            VALUES ($1, $2, $3, 'text', $4, $5, NOW() - INTERVAL '${minsAgo} minutes')`,
