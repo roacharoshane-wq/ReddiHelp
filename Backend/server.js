@@ -1891,8 +1891,8 @@ app.get('/api/incidents/:id/match', authenticateToken, authorize('coordinator', 
     if (incident.rows.length === 0) return res.status(404).json({ error: 'Incident not found' });
 
     const inc = incident.rows[0];
-    const incidentParish = normalizeParishName(inc.area_id);
-    const incidentParish = normalizeParishName(inc.area_id);
+    //const incidentParish = normalizeParishName(inc.area_id);
+    //const incidentParish = normalizeParishName(inc.area_id);
     const incType = inc.type;
     const incidentParish = normalizeParishName(inc.area_id);
 
