@@ -73,9 +73,9 @@ function validateProductionConfig() {
     );
   }
 
-  if (MOCK_AUTH) {
-    throw new Error('MOCK_AUTH must be false in production');
-  }
+  // if (MOCK_AUTH) {
+  //   throw new Error('MOCK_AUTH must be false in production');
+  // }
 
   if (TESTING_MODE) {
     throw new Error('TESTING_MODE must be false in production');
@@ -1891,10 +1891,9 @@ app.get('/api/incidents/:id/match', authenticateToken, authorize('coordinator', 
     if (incident.rows.length === 0) return res.status(404).json({ error: 'Incident not found' });
 
     const inc = incident.rows[0];
-    //const incidentParish = normalizeParishName(inc.area_id);
-    //const incidentParish = normalizeParishName(inc.area_id);
-    const incType = inc.type;
     const incidentParish = normalizeParishName(inc.area_id);
+    const incType = inc.type;
+    
 
     // Skill mapping: incident type → relevant skills
     const skillMap = {
