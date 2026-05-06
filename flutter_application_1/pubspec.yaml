@@ -1,0 +1,33 @@
+name: flutter_application_1
+description: A new Flutter project for Disaster Response Platform.
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: '^3.2.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  
+  geocoding: ^2.1.1
+  http: ^1.1.0
+  flutter_map: ^8.2.2
+  latlong2: ^0.9.0
+  geolocator: ^10.1.0
+  font_awesome_flutter: ^10.6.0
+  intl: ^0.18.1
+  provider: ^6.1.1
+  flutter_map_geojson2: ^1.0.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter  # ✅ No semicolon here
+  
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/geojson/jamaica_parishes.geojson
