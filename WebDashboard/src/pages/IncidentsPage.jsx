@@ -391,8 +391,21 @@ function AIDispatchTab() {
             <h3 className="text-sm font-semibold text-amber-700 dark:text-amber-300 mb-2">Needs Approval ({result.needs_approval.length})</h3>
             {result.needs_approval.map((a) => (
               <div key={a.incidentId} className="text-xs py-1 flex items-center justify-between">
-                <span>#{a.incidentId} → {a.volunteerName} ({a.confidence}%)</span>
-                <button onClick={() => { api.post(`/incidents/${a.incidentId}/assign`, { volunteerId: a.volunteerId }).then(() => toast.success('Approved!')) }} className="text-teal-600 hover:text-teal-700 font-medium">Approve</button>
+                <span>#{a.incidentId} → {a.volunteerName}</span>
+                <button onClick={async () => {
+                  try {
+                    await api.post(`/incidents/${a.incidentId}/assign`, { volunteerId: a.volunteerId })
+                    setResult((prev) => ({
+                      ...prev,
+                      needs_approval: prev.needs_approval.filter((item) => item.incidentId !== a.incidentId)
+                    }))
+                    toast.success('Approved!')
+                    queryClient.invalidateQueries({ queryKey: ['dispatch-decisions'] })
+                    queryClient.invalidateQueries({ queryKey: ['incidents'] })
+                  } catch (err) {
+                    toast.error(err.message)
+                  }
+                }} className="text-teal-600 hover:text-teal-700 font-medium">Approve</button>
               </div>
             ))}
           </div>
@@ -424,7 +437,6 @@ function AIDispatchTab() {
                   <span className="text-gray-600 dark:text-gray-400">Incident #{d.incident_id}</span>
                   <span>→</span>
                   <span>{d.volunteer_name || `#${d.volunteer_id}`}</span>
-                  <span className="text-xs px-1.5 py-0.5 bg-gray-100 dark:bg-gray-700 rounded">{d.confidence}%</span>
                   <span className="text-xs text-gray-400 ml-auto">{d.decision?.replace('_', ' ')}</span>
                 </button>
                 {isSelected && (
