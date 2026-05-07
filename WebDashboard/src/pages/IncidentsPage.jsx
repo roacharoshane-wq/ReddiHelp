@@ -346,11 +346,16 @@ function AIDispatchTab() {
   const [running, setRunning] = useState(false)
   const [selectedDecision, setSelectedDecision] = useState(null)
   const [approvingId, setApprovingId] = useState(null)
+  const [localDecisions, setLocalDecisions] = useState([])
 
   const { data: decisions = [] } = useQuery({
     queryKey: ['dispatch-decisions'],
     queryFn: () => api.get('/dispatch-decisions'),
   })
+
+  useEffect(() => {
+    setLocalDecisions(decisions)
+  }, [decisions])
 
   const runDispatch = async () => {
     setRunning(true)
@@ -384,7 +389,7 @@ function AIDispatchTab() {
           <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-xl p-4">
             <h3 className="text-sm font-semibold text-green-700 dark:text-green-300 mb-2">Auto-Assigned ({result.auto_assigned.length})</h3>
             {result.auto_assigned.map((a) => (
-              <div key={a.incidentId} className="text-xs py-1">Incident #{a.incidentId} → {a.volunteerName} ({a.confidence}%)</div>
+              <div key={a.incidentId} className="text-xs py-1">Incident #{a.incidentId} → {a.volunteerName}</div>
             ))}
           </div>
           <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl p-4">
@@ -423,7 +428,7 @@ function AIDispatchTab() {
           <h3 className="font-semibold text-sm">Recent Dispatch Decisions</h3>
         </div>
         <div className="divide-y divide-gray-100 dark:divide-gray-700">
-          {decisions.slice(0, 20).map((d) => {
+          {localDecisions.slice(0, 20).map((d) => {
             const isApprovalNeeded = d.decision === 'closest_match' || d.decision === 'needs_approval'
             const isSelected = selectedDecision === d.id
             return (
@@ -441,7 +446,22 @@ function AIDispatchTab() {
                 </button>
                 {isSelected && (
                   <div className="px-4 pb-3 text-sm text-gray-700 dark:text-gray-300">
-                    <div className="mb-2 text-xs text-gray-500 dark:text-gray-400">Type: {d.incident_type || 'unknown'}</div>
+                    <div className="mb-2 text-xs text-gray-500 dark:text-gray-400">Full incident details</div>
+                    <div className="grid gap-2 text-xs sm:grid-cols-2">
+                      <div><span className="font-semibold">Type:</span> {d.incident_type || 'unknown'}</div>
+                      <div><span className="font-semibold">Severity:</span> {d.severity ?? 'N/A'}</div>
+                      <div><span className="font-semibold">Status:</span> {d.status || 'unknown'}</div>
+                      <div><span className="font-semibold">Area:</span> {d.area_id || 'unknown'}</div>
+                      <div><span className="font-semibold">Disaster:</span> {d.disaster_type || 'unknown'}</div>
+                    </div>
+                    <div className="mt-3 text-xs text-gray-600 dark:text-gray-400">
+                      <div className="mb-2"><span className="font-semibold">Description:</span> {d.description || 'No description available'}</div>
+                      {d.resource_needs ? (
+                        <div><span className="font-semibold">Resource needs:</span> {Object.entries(d.resource_needs).map(([key, value]) => `${key}: ${value}`).join(', ')}</div>
+                      ) : (
+                        <div><span className="font-semibold">Resource needs:</span> Not available</div>
+                      )}
+                    </div>
                     {isApprovalNeeded ? (
                       <div className="flex flex-wrap items-center gap-3">
                         <span className="text-xs rounded-full bg-amber-100 text-amber-800 px-2 py-1">Approval required</span>
@@ -450,6 +470,8 @@ function AIDispatchTab() {
                             try {
                               setApprovingId(d.id)
                               await api.post(`/incidents/${d.incident_id}/assign`, { volunteerId: d.volunteer_id })
+                              setLocalDecisions((prev) => prev.filter((item) => item.id !== d.id))
+                              if (selectedDecision === d.id) setSelectedDecision(null)
                               toast.success('Incident approved and confirmed')
                               queryClient.invalidateQueries({ queryKey: ['dispatch-decisions'] })
                               queryClient.invalidateQueries({ queryKey: ['incidents'] })

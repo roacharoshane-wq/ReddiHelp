@@ -294,6 +294,9 @@ const incidentTemplates = [
   { type: 'flood',    severity: 2, description: 'Community isolated, need food and water',                disasterType: 'flood'     },
   { type: 'trapped',  severity: 4, description: 'Child trapped in debris after wall collapse',            disasterType: 'earthquake'},
   { type: 'medical',  severity: 3, description: 'COVID-19 outbreak at shelter, need PPE',                 disasterType: 'other'     },
+  { type: 'other',    severity: 4, description: 'Major road collapse blocking emergency access route',     disasterType: 'earthquake' },
+  { type: 'other',    severity: 4, description: 'Large-scale water contamination in community water supply', disasterType: 'flood' },
+  { type: 'shelter',  severity: 2, description: 'Temporary shelter overcrowding after evacuation',        disasterType: 'hurricane' },
 ];
 
 const resourceTypes = [

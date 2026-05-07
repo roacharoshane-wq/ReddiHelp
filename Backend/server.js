@@ -3387,7 +3387,8 @@ app.post('/api/auto-dispatch/run', authenticateToken, authorize('coordinator', '
 app.get('/api/dispatch-decisions', authenticateToken, async (req, res) => {
   try {
     const result = await pgPool.query(
-      `SELECT dd.*, i.type as incident_type, u.username as volunteer_name
+      `SELECT dd.*, i.type as incident_type, i.description, i.severity, i.status, i.area_id, i.disaster_type, i.resource_needs,
+              u.username as volunteer_name
        FROM dispatch_decisions dd
        LEFT JOIN incidents i ON i.id = dd.incident_id
        LEFT JOIN users u ON u.id = dd.volunteer_id

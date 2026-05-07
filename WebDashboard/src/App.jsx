@@ -8,7 +8,6 @@ import MapPage from './pages/MapPage'
 import IncidentsPage from './pages/IncidentsPage'
 import IncidentDetailPage from './pages/IncidentDetailPage'
 import VolunteersPage from './pages/VolunteersPage'
-import ResourcesPage from './pages/ResourcesPage'
 import BroadcastsPage from './pages/BroadcastsPage'
 import AnalyticsPage from './pages/AnalyticsPage'
 import ReportsPage from './pages/ReportsPage'
@@ -32,7 +31,6 @@ export default function App() {
         <Route path="/incidents" element={<IncidentsPage />} />
         <Route path="/incidents/:id" element={<IncidentDetailPage />} />
         <Route path="/volunteers" element={<VolunteersPage />} />
-        <Route path="/resources" element={<ResourcesPage />} />
         <Route path="/broadcasts" element={<BroadcastsPage />} />
         <Route path="/analytics" element={<AnalyticsPage />} />
         <Route path="/reports" element={<ReportsPage />} />

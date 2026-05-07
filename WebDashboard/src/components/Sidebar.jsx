@@ -11,7 +11,6 @@ const navItems = [
   { to: '/map', icon: Map, label: 'Map' },
   { to: '/incidents', icon: AlertTriangle, label: 'Incidents' },
   { to: '/volunteers', icon: Users, label: 'Volunteers' },
-  { to: '/resources', icon: Package, label: 'Resources' },
   { to: '/broadcasts', icon: Radio, label: 'Broadcasts' },
   { to: '/analytics', icon: BarChart3, label: 'Analytics' },
   { to: '/reports', icon: FileText, label: 'Reports' },
