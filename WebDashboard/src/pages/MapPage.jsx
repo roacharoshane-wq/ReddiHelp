@@ -83,7 +83,7 @@ function normalizeMapboxStyle(style) {
 }
 
 const SEVERITY_COLORS = ['#22c55e', '#eab308', '#f97316', '#ef4444', '#991b1b']
-const STATUS_COLORS = { active: '#ef4444', 'in-progress': '#f97316', 'unassigned': '#9ca3af', resolved: '#22c55e' }
+const STATUS_COLORS = { unassigned: '#ef4444', active: '#3b82f6', 'in-progress': '#f97316', resolved: '#22c55e', submitted: '#9ca3af' }
 
 export default function MapPage() {
   const user = useAuthStore((s) => s.user)
@@ -390,7 +390,7 @@ export default function MapPage() {
         map.addLayer({ id: 'incident-points', type: 'circle', source: 'incidents', filter: ['!', ['has', 'point_count']], paint: { 'circle-color': ['match', ['get', 'status'], 'active', '#ef4444', 'in-progress', '#f97316', 'resolved', '#22c55e', '#9ca3af'], 'circle-radius': ['interpolate', ['linear'], ['get', 'severity'], 1, 6, 5, 14], 'circle-stroke-width': 2, 'circle-stroke-color': '#fff' } })
       }
       if (!map.getLayer('incident-pulse')) {
-        map.addLayer({ id: 'incident-pulse', type: 'circle', source: 'incidents', filter: ['all', ['!', ['has', 'point_count']], ['==', ['get', 'assignedTo'], null], ['==', ['get', 'status'], 'unassigned']], paint: { 'circle-color': '#ef4444', 'circle-radius': ['interpolate', ['linear'], ['get', 'severity'], 1, 10, 5, 22], 'circle-opacity': 0.3 } })
+        map.addLayer({ id: 'incident-pulse', type: 'circle', source: 'incidents', filter: ['all', ['!', ['has', 'point_count']], ['==', ['get', 'assignedTo'], null], ['==', ['get', 'status'], 'active']], paint: { 'circle-color': '#ef4444', 'circle-radius': ['interpolate', ['linear'], ['get', 'severity'], 1, 10, 5, 22], 'circle-opacity': 0.3 } })
       }
 
       if (!map.getSource('volunteers')) {

@@ -11,8 +11,8 @@ require('dotenv').config();
 
 const NODE_ENV = process.env.NODE_ENV || 'development';
 const IS_PRODUCTION = NODE_ENV === 'production';
-const MOCK_AUTH = process.env.MOCK_AUTH === 'true';
-const TESTING_MODE = process.env.TESTING_MODE !== 'false';
+const MOCK_AUTH = parseBoolean(process.env.MOCK_AUTH, false);
+const TESTING_MODE = parseBoolean(process.env.TESTING_MODE, false);
 
 function parseBoolean(rawValue, defaultValue = false) {
   if (rawValue === undefined || rawValue === null || rawValue === '') {
@@ -73,9 +73,9 @@ function validateProductionConfig() {
     );
   }
 
-  // if (MOCK_AUTH) {
-  //   throw new Error('MOCK_AUTH must be false in production');
-  // }
+  if (MOCK_AUTH) {
+    throw new Error('MOCK_AUTH must be false in production');
+  }
 
   if (TESTING_MODE) {
     throw new Error('TESTING_MODE must be false in production');
@@ -95,6 +95,13 @@ function validateProductionConfig() {
 }
 
 validateProductionConfig();
+
+if (MOCK_AUTH && !IS_PRODUCTION) {
+  console.warn('⚠️ MOCK_AUTH is enabled. API routes will bypass real token validation.');
+}
+if (TESTING_MODE && !IS_PRODUCTION) {
+  console.warn('⚠️ TESTING_MODE is enabled. OTP verification accepts any 6-digit code.');
+}
 
 const corsOptions = {
   origin(origin, callback) {
@@ -265,7 +272,7 @@ async function ensureDatabaseExists() {
         description TEXT,
         disaster_type VARCHAR(50),
         area_id VARCHAR(100),
-        status VARCHAR(20) DEFAULT 'unassigned',
+        status VARCHAR(20) DEFAULT 'active',
         submitted_by INTEGER REFERENCES users(id),
         assigned_to INTEGER REFERENCES users(id),
         idempotency_key VARCHAR(255) UNIQUE,
@@ -277,9 +284,9 @@ async function ensureDatabaseExists() {
       CREATE INDEX IF NOT EXISTS idx_incidents_status_created ON incidents(status, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_incidents_submitted_created ON incidents(submitted_by, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_incidents_assigned_created ON incidents(assigned_to, created_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_incidents_unassigned_created
+      CREATE INDEX IF NOT EXISTS idx_incidents_active_unassigned_created
         ON incidents(created_at DESC)
-        WHERE status = 'unassigned';
+        WHERE status = 'active' AND assigned_to IS NULL;
 
       -- Resources table
       CREATE TABLE IF NOT EXISTS resources (
@@ -458,8 +465,9 @@ async function ensureDatabaseExists() {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS check_in_station_lon DOUBLE PRECISION;
       ALTER TABLE incidents ADD COLUMN IF NOT EXISTS people_affected INTEGER;
       ALTER TABLE incidents ADD COLUMN IF NOT EXISTS reference_number VARCHAR(50);
-      ALTER TABLE incidents ADD COLUMN IF NOT EXISTS source VARCHAR(20) DEFAULT 'app';
       ALTER TABLE incidents ADD COLUMN IF NOT EXISTS source_phone VARCHAR(20);
+      ALTER TABLE incidents DROP CONSTRAINT IF EXISTS check_incident_status;
+      ALTER TABLE incidents ADD CONSTRAINT check_incident_status CHECK (status IN ('active', 'resolved', 'in-progress', 'unassigned'));
     `);
 
     // Phase 4: Resource enhancements
@@ -597,10 +605,14 @@ function authenticateToken(req, res, next) {
 
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
-  if (!token) return res.sendStatus(401);
+  if (!token) {
+    return res.status(401).json({ error: 'Authorization token required' });
+  }
 
   jwt.verify(token, ACCESS_TOKEN_SECRET, (err, user) => {
-    if (err) return res.sendStatus(403);
+    if (err) {
+      return res.status(403).json({ error: 'Invalid or expired token' });
+    }
     req.user = user;
     next();
   });
@@ -646,7 +658,8 @@ app.post('/api/auth/request-otp', async (req, res) => {
 app.post('/api/auth/verify-otp', async (req, res) => {
   const { phone, otp, role = 'victim' } = req.body;
 
-  // TESTING_MODE accepts any 6-digit OTP. Set TESTING_MODE=false in .env for production.
+  // TESTING_MODE accepts any 6-digit OTP only when explicitly enabled for development.
+  // Set TESTING_MODE=true in .env for local testing and TESTING_MODE=false in production.
 
   if (!TESTING_MODE) {
     const result = await pgPool.query(
@@ -1018,9 +1031,19 @@ app.post('/api/incidents', authenticateToken, async (req, res) => {
 
   const point = `POINT(${lon} ${lat})`;
   const result = await pgPool.query(
-    `INSERT INTO incidents (type, location, severity, description, disaster_type, area_id, status, submitted_by, idempotency_key)
-     VALUES ($1, ST_GeogFromText($2), $3, $4, $5, $6, 'unassigned', $7, $8) RETURNING *`,
-    [type, point, severity, description, disasterType, areaId, req.user.id, idempotencyKey || null]
+    `INSERT INTO incidents (type, location, severity, description, disaster_type, area_id, submitted_by, source_phone, idempotency_key)
+     VALUES ($1, ST_GeogFromText($2), $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+    [
+      type,
+      point,
+      severity,
+      description,
+      disasterType,
+      areaId,
+      req.user.id,
+      req.user.phone || null,
+      idempotencyKey || null,
+    ]
   );
   const newIncident = result.rows[0];
 
@@ -1068,7 +1091,16 @@ app.get('/api/incidents', authenticateToken, async (req, res) => {
       if (!userId) {
         return res.status(401).json({ error: 'Unauthenticated user context' });
       }
-      conditions.push(`i.submitted_by = ${pushParam(userId)}`);
+      // Get user's phone number
+      const userResult = await pgPool.query('SELECT phone FROM users WHERE id = $1', [userId]);
+      if (userResult.rows.length === 0) {
+        return res.status(401).json({ error: 'User not found' });
+      }
+      const userPhone = userResult.rows[0].phone;
+      
+      const userIdRef = pushParam(userId);
+      const userPhoneRef = pushParam(userPhone);
+      conditions.push(`(i.submitted_by = ${userIdRef} OR i.source_phone = ${userPhoneRef})`);
     } else if (userRole === 'volunteer' || userRole === 'responder') {
       if (!userId) {
         return res.status(401).json({ error: 'Unauthenticated user context' });
@@ -1076,7 +1108,7 @@ app.get('/api/incidents', authenticateToken, async (req, res) => {
 
       const userRef = pushParam(userId);
       conditions.push(
-        `(i.status IN ('unassigned', 'active', 'in-progress') OR i.assigned_to = ${userRef} OR i.submitted_by = ${userRef})`
+        `(i.status IN ('active', 'in-progress') OR i.assigned_to = ${userRef} OR i.submitted_by = ${userRef})`
       );
     } else if (userRole !== 'coordinator' && userRole !== 'admin') {
       return res.status(403).json({ error: 'Role not authorized for incident list' });
@@ -1167,7 +1199,7 @@ app.get('/api/incidents/recommended', authenticateToken, authorize('volunteer', 
          assigned_to as "assignedTo",
          ST_Distance(location, ST_GeogFromText($1)) AS distance
        FROM incidents
-       WHERE status = 'unassigned'
+       WHERE status = 'active'
          AND ST_DWithin(location, ST_GeogFromText($1), $2)
        ORDER BY severity DESC, ST_Distance(location, ST_GeogFromText($1)) ASC
        LIMIT 50`,
@@ -1461,11 +1493,6 @@ app.patch('/api/incidents/:id/transition', async (req, res) => {
 
     const fromStatus = current.rows[0].status;
 
-    const validStatuses = new Set(['unassigned', 'active', 'in-progress', 'resolved']);
-    if (!validStatuses.has(newStatus)) {
-      return res.status(400).json({ error: 'Invalid status' });
-    }
-
     await pgPool.query('UPDATE incidents SET status = $1, updated_at = NOW() WHERE id = $2', [newStatus, id]);
 
     // Log history
@@ -1482,7 +1509,7 @@ app.patch('/api/incidents/:id/transition', async (req, res) => {
     if (current.rows[0].source_phone) {
       const ref = current.rows[0].reference_number || id;
       const statusMessages = {
-        'active': `Update for ${ref}: A volunteer has been assigned to help you.`,
+        'in-progress': `Update for ${ref}: A volunteer has been assigned to help you.`,
         'in-progress': `Update for ${ref}: Help is on the way to your location.`,
         'resolved': `Update for ${ref}: Your request has been resolved. Stay safe.`,
       };
@@ -1495,7 +1522,7 @@ app.patch('/api/incidents/:id/transition', async (req, res) => {
 
     // Insert system message into chat
     const systemContent = {
-      'active': 'A volunteer has been assigned to this incident.',
+      'in-progress': 'A volunteer has been assigned to this incident.',
       'in-progress': 'Help is en route.',
       'resolved': 'This incident has been resolved.',
     };
@@ -2020,12 +2047,9 @@ app.post('/api/incidents/:id/assign', authenticateToken, async (req, res) => {
 
     const prevStatus = current.rows[0].status;
     const prevAssigned = current.rows[0].assigned_to;
-    const validStatuses = new Set(['unassigned', 'active', 'in-progress', 'resolved']);
-    const newStatus = status || 'active';
-    if (!validStatuses.has(newStatus)) {
-      return res.status(400).json({ error: 'Invalid status' });
-    }
+    const newStatus = status || 'in-progress';
 
+    // Update incident assignment
     await pgPool.query(
       'UPDATE incidents SET assigned_to = $1, status = $2, updated_at = NOW() WHERE id = $3',
       [volunteerId, newStatus, incidentId]
@@ -2082,7 +2106,7 @@ app.post('/api/incidents/:id/assign', authenticateToken, async (req, res) => {
       [volunteerId, JSON.stringify({ incidentId, message: 'You have been assigned a new task' })]
     );
 
-    res.json({ status: 'assigned', incidentId, volunteerId });
+    res.json({ status: 'in-progress', incidentId, volunteerId });
   } catch (err) {
     console.error('❌ Assignment error:', err);
     res.status(500).json({ error: 'Internal error' });
@@ -2784,7 +2808,7 @@ app.get('/api/analytics/response-times', authenticateToken, async (req, res) => 
          COUNT(*) as sample_size
        FROM incident_history ih
        JOIN incidents i ON i.id = ih.incident_id
-       WHERE ih.from_status = 'active' AND ih.to_status = 'in-progress'
+       WHERE ih.from_status = 'unassigned' AND ih.to_status IN ('in-progress')
          AND i.created_at > NOW() - INTERVAL '1 hour' * $1`,
       [hours]
     );
@@ -2800,7 +2824,7 @@ app.get('/api/analytics/timeline', authenticateToken, async (req, res) => {
   try {
     const result = await pgPool.query(
       `SELECT date_trunc('hour', created_at) as hour,
-              COUNT(*) FILTER (WHERE status IN ('active','unassigned')) as active,
+              COUNT(*) FILTER (WHERE status IN ('active','in-progress')) as active,
               COUNT(*) FILTER (WHERE status = 'in-progress') as in_progress,
               COUNT(*) FILTER (WHERE status = 'resolved') as resolved,
               COUNT(*) as total
@@ -2864,7 +2888,7 @@ app.get('/api/analytics/health-score', authenticateToken, async (req, res) => {
     const rtResult = await pgPool.query(
       `SELECT AVG(EXTRACT(EPOCH FROM (ih.changed_at - i.created_at)))/60 as avg_min
        FROM incident_history ih JOIN incidents i ON i.id = ih.incident_id
-       WHERE ih.from_status = 'active' AND ih.to_status = 'in-progress'
+       WHERE ih.from_status = 'unassigned' AND ih.to_status IN ('in-progress')
          AND i.created_at > NOW() - INTERVAL '24 hours'`
     );
     const avgMin = parseFloat(rtResult.rows[0].avg_min) || 0;
@@ -3374,7 +3398,7 @@ app.post('/api/auto-dispatch/run', authenticateToken, authorize('coordinator', '
       const decision = confidence > 80 ? 'auto_assigned' : 'closest_match';
       await pgPool.query('UPDATE incidents SET assigned_to = $1, status = $2, updated_at = NOW() WHERE id = $3', [best.id, 'in-progress', inc.id]);
       await pgPool.query("UPDATE users SET availability = 'on_task' WHERE id = $1", [best.id]);
-      await pgPool.query('INSERT INTO incident_history (incident_id, from_status, to_status, changed_by) VALUES ($1, $2, $3, $4)', [inc.id, 'active', 'in-progress', req.user.id]);
+      await pgPool.query('INSERT INTO incident_history (incident_id, from_status, to_status, changed_by) VALUES ($1, $2, $3, $4)', [inc.id, 'unassigned', 'in-progress', req.user.id]);
       await pgPool.query('INSERT INTO dispatch_decisions (incident_id, volunteer_id, confidence, decision) VALUES ($1, $2, $3, $4)', [inc.id, best.id, confidence, decision]);
       io.to('coordinators').emit('incident:updated', { id: inc.id, status: 'in-progress', assignedTo: best.id });
 

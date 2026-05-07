@@ -9,7 +9,8 @@ import toast from 'react-hot-toast'
 const TYPE_ICONS = { medical: '🏥', fire: '🔥', flood: '🌊', trapped: '⚠️', shelter: '🏠', supplies: '📦', other: '📋' }
 const SEV_COLORS = ['', 'bg-green-500', 'bg-yellow-400', 'bg-orange-400', 'bg-red-500', 'bg-red-800']
 const STATUS_STYLES = {
-  unassigned: 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300',
+  submitted: 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300',
+  unassigned: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300',
   active: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300',
   'in-progress': 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300',
   resolved: 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300',
@@ -186,7 +187,7 @@ export default function IncidentsPage() {
             </div>
 
             <div className="flex gap-1">
-              {['active', 'in-progress', 'resolved'].map((s) => (
+              {['unassigned', 'active', 'in-progress', 'resolved'].map((s) => (
                 <button key={s} onClick={() => toggleFilter('statuses', s)} className={`px-2 py-1 text-[10px] font-medium rounded-full border transition-colors ${filters.statuses.includes(s) ? 'bg-teal-100 dark:bg-teal-900/40 border-teal-300 text-teal-700' : 'border-gray-200 dark:border-gray-600 text-gray-500'}`}>
                   {s}
                 </button>

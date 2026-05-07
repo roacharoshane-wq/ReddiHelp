@@ -37,7 +37,7 @@ export default function DashboardPage() {
   const healthEmoji = { green: '✅', amber: '⚠️', red: '🚨' }
 
   const kpis = [
-    { key: 'unassigned', label: 'Unassigned', value: incidents.filter(i => !i.assignedTo && i.status !== 'resolved').length, icon: CircleAlert, color: 'text-red-500', bg: 'bg-red-50 dark:bg-red-900/20', filter: (i) => !i.assignedTo && i.status !== 'resolved' },
+    { key: 'unassigned', label: 'Unassigned', value: incidents.filter(i => i.status === 'unassigned').length, icon: CircleAlert, color: 'text-red-500', bg: 'bg-red-50 dark:bg-red-900/20', filter: (i) => i.status === 'unassigned' },
     { key: 'total', label: 'Total Incidents', value: stats?.totalIncidents || 0, icon: Activity, color: 'text-blue-500', bg: 'bg-blue-50 dark:bg-blue-900/20', filter: () => true },
     { key: 'inprogress', label: 'In Progress', value: incidents.filter(i => i.status === 'in-progress').length, icon: Loader, color: 'text-orange-500', bg: 'bg-orange-50 dark:bg-orange-900/20', filter: (i) => i.status === 'in-progress' },
     { key: 'resolved', label: 'Resolved', value: stats?.resolvedIncidents || 0, icon: CheckCircle, color: 'text-teal-500', bg: 'bg-teal-50 dark:bg-teal-900/20', filter: (i) => i.status === 'resolved' },
@@ -88,7 +88,7 @@ export default function DashboardPage() {
                   <p className="text-xs text-gray-500 truncate">{inc.description}</p>
                 </div>
                 <span className="text-xs text-gray-400 sm:max-w-32 truncate">{inc.responderName || (inc.assignedTo ? `#${inc.assignedTo}` : 'Unassigned')}</span>
-                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${inc.status === 'active' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300' : inc.status === 'resolved' ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300'}`}>
+                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${inc.status === 'active' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300' : inc.status === 'resolved' ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : inc.status === 'in-progress' ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300' : 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'}`}>
                   {inc.status}
                 </span>
               </div>
@@ -112,7 +112,7 @@ export default function DashboardPage() {
                   <p className="text-sm font-medium truncate">{inc.type} — {inc.areaId || 'Unknown area'}</p>
                   <p className="text-xs text-gray-500 truncate">{inc.description}</p>
                 </div>
-                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${inc.status === 'active' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300' : inc.status === 'resolved' ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300'}`}>
+                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${inc.status === 'active' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300' : inc.status === 'resolved' ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : inc.status === 'in-progress' ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300' : 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'}`}>
                   {inc.status}
                 </span>
               </div>

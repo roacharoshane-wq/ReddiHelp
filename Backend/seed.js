@@ -61,7 +61,7 @@ async function ensureSchema(client) {
       description TEXT,
       disaster_type VARCHAR(50),
       area_id VARCHAR(100),
-      status VARCHAR(20) DEFAULT 'unassigned',
+      status VARCHAR(20) DEFAULT 'active',
       submitted_by INTEGER REFERENCES users(id),
       assigned_to INTEGER REFERENCES users(id),
       idempotency_key VARCHAR(255) UNIQUE,
@@ -252,6 +252,8 @@ async function ensureSchema(client) {
     ALTER TABLE incidents ADD COLUMN IF NOT EXISTS source VARCHAR(20) DEFAULT 'app';
     ALTER TABLE incidents ADD COLUMN IF NOT EXISTS source_phone VARCHAR(20);
     ALTER TABLE incidents ADD COLUMN IF NOT EXISTS resource_needs JSONB;
+    ALTER TABLE incidents DROP CONSTRAINT IF EXISTS check_incident_status;
+    ALTER TABLE incidents ADD CONSTRAINT check_incident_status CHECK (status IN ('active', 'resolved', 'in-progress', 'unassigned'));
   `);
 
   console.log('Schema ensured');
@@ -569,7 +571,7 @@ async function seedDatabase() {
     // -- 5. Incidents ------------------------------------------
     console.log('Seeding incidents...');
     const allResponders = [...volunteerIds, ...responderIds];
-    const statuses = ['active', 'in-progress', 'resolved', 'unassigned', 'active'];
+    const statuses = ['unassigned', 'in-progress', 'resolved', 'unassigned', 'unassigned'];
     const incidentIds = [];
 
     // Helper for resource estimation (same as backend)
@@ -599,7 +601,7 @@ async function seedDatabase() {
       const pt = randomPointNear(p);
       const status = pick(statuses);
       const submittedBy = Math.random() > 0.3 ? pick(victimIds) : null;
-      const assignedTo = status === 'unassigned' ? null : pick(allResponders);
+      const assignedTo = status !== 'unassigned' ? pick(allResponders) : null;
       const daysAgo = Math.floor(Math.random() * 7);
       const hoursAgo = Math.floor(Math.random() * 24);
       const areaId = p.name.toLowerCase().replace(/ /g, '_');
@@ -681,8 +683,8 @@ async function seedDatabase() {
            VALUES ($1, 'unassigned', $2, $3, $4)`,
           [incidentId, rows[0].status, pick(coordinatorIds), new Date(created.getTime() + 30 * 60000)]
         );
-        // Add a second history entry for non-active incidents
-        if (rows[0].status !== 'active') {
+        // Add a second history entry for non-unassigned incidents
+        if (rows[0].status !== 'unassigned') {
           await client.query(
             `INSERT INTO incident_history (incident_id, from_status, to_status, changed_by, changed_at)
              VALUES ($1, 'active', $2, $3, $4)`,
