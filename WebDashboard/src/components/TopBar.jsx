@@ -74,7 +74,7 @@ export default function TopBar({ onMenuClick, mobileNavOpen = false }) {
             <div className="w-9 h-9 bg-gradient-to-br from-yellow-400 via-red-500 to-purple-600 rounded-full flex items-center justify-center shadow-lg shadow-red-500/30">
               <Shield className="w-5 h-5 text-white drop-shadow" />
             </div>
-            <span className="text-sm font-bold bg-gradient-to-r from-yellow-500 via-red-500 to-purple-500 bg-clip-text text-transparent hidden lg:block">ReddiBoss</span>
+            <span className="text-sm font-bold bg-gradient-to-r from-yellow-500 via-red-500 to-purple-500 bg-clip-text text-transparent hidden lg:block">ReddiAdmin</span>
           </div>
         </div>
       </header>

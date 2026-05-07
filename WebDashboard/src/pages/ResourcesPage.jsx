@@ -12,7 +12,6 @@ export default function ResourcesPage() {
   const [selectedId, setSelectedId] = useState(null)
   const [showAdd, setShowAdd] = useState(false)
   const [showImport, setShowImport] = useState(false)
-  const queryClient = useQueryClient()
 
   const { data: resources = [], isLoading } = useQuery({
     queryKey: ['resources'],

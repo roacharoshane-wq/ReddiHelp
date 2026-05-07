@@ -344,6 +344,8 @@ function AIDispatchTab() {
   const queryClient = useQueryClient()
   const [result, setResult] = useState(null)
   const [running, setRunning] = useState(false)
+  const [selectedDecision, setSelectedDecision] = useState(null)
+  const [approvingId, setApprovingId] = useState(null)
 
   const { data: decisions = [] } = useQuery({
     queryKey: ['dispatch-decisions'],
@@ -408,16 +410,57 @@ function AIDispatchTab() {
           <h3 className="font-semibold text-sm">Recent Dispatch Decisions</h3>
         </div>
         <div className="divide-y divide-gray-100 dark:divide-gray-700">
-          {decisions.slice(0, 20).map((d) => (
-            <div key={d.id} className="flex items-center gap-3 p-3 text-sm">
-              <span className={`w-2 h-2 rounded-full ${d.decision === 'auto_assigned' ? 'bg-green-500' : d.decision === 'needs_approval' ? 'bg-amber-400' : 'bg-red-500'}`} />
-              <span className="text-gray-600 dark:text-gray-400">Incident #{d.incident_id}</span>
-              <span>→</span>
-              <span>{d.volunteer_name || `#${d.volunteer_id}`}</span>
-              <span className="text-xs px-1.5 py-0.5 bg-gray-100 dark:bg-gray-700 rounded">{d.confidence}%</span>
-              <span className="text-xs text-gray-400 ml-auto">{d.decision?.replace('_', ' ')}</span>
-            </div>
-          ))}
+          {decisions.slice(0, 20).map((d) => {
+            const isApprovalNeeded = d.decision === 'closest_match' || d.decision === 'needs_approval'
+            const isSelected = selectedDecision === d.id
+            return (
+              <div key={d.id} className="space-y-2">
+                <button
+                  type="button"
+                  onClick={() => setSelectedDecision(isSelected ? null : d.id)}
+                  className="w-full flex items-center gap-3 p-3 text-sm text-left hover:bg-gray-50 dark:hover:bg-gray-900"
+                >
+                  <span className={`w-2 h-2 rounded-full ${d.decision === 'auto_assigned' ? 'bg-green-500' : isApprovalNeeded ? 'bg-amber-400' : 'bg-red-500'}`} />
+                  <span className="text-gray-600 dark:text-gray-400">Incident #{d.incident_id}</span>
+                  <span>→</span>
+                  <span>{d.volunteer_name || `#${d.volunteer_id}`}</span>
+                  <span className="text-xs px-1.5 py-0.5 bg-gray-100 dark:bg-gray-700 rounded">{d.confidence}%</span>
+                  <span className="text-xs text-gray-400 ml-auto">{d.decision?.replace('_', ' ')}</span>
+                </button>
+                {isSelected && (
+                  <div className="px-4 pb-3 text-sm text-gray-700 dark:text-gray-300">
+                    <div className="mb-2 text-xs text-gray-500 dark:text-gray-400">Type: {d.incident_type || 'unknown'}</div>
+                    {isApprovalNeeded ? (
+                      <div className="flex flex-wrap items-center gap-3">
+                        <span className="text-xs rounded-full bg-amber-100 text-amber-800 px-2 py-1">Approval required</span>
+                        <button
+                          onClick={async () => {
+                            try {
+                              setApprovingId(d.id)
+                              await api.post(`/incidents/${d.incident_id}/assign`, { volunteerId: d.volunteer_id })
+                              toast.success('Incident approved and confirmed')
+                              queryClient.invalidateQueries({ queryKey: ['dispatch-decisions'] })
+                              queryClient.invalidateQueries({ queryKey: ['incidents'] })
+                            } catch (err) {
+                              toast.error(err.message)
+                            } finally {
+                              setApprovingId(null)
+                            }
+                          }}
+                          disabled={approvingId === d.id}
+                          className="px-3 py-1.5 bg-teal-600 text-white rounded-lg text-xs font-medium hover:bg-teal-700 disabled:opacity-50"
+                        >
+                          {approvingId === d.id ? 'Approving...' : 'Approve'}
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="text-xs text-gray-500 dark:text-gray-400">No manual approval needed for this decision.</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })}
           {decisions.length === 0 && <p className="text-sm text-gray-400 p-4 text-center">No dispatch decisions yet</p>}
         </div>
       </div>
