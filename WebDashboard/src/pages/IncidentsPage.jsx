@@ -9,9 +9,8 @@ import toast from 'react-hot-toast'
 const TYPE_ICONS = { medical: '🏥', fire: '🔥', flood: '🌊', trapped: '⚠️', shelter: '🏠', supplies: '📦', other: '📋' }
 const SEV_COLORS = ['', 'bg-green-500', 'bg-yellow-400', 'bg-orange-400', 'bg-red-500', 'bg-red-800']
 const STATUS_STYLES = {
-  submitted: 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300',
+  unassigned: 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300',
   active: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300',
-  assigned: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300',
   'in-progress': 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300',
   resolved: 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300',
 }

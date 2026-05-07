@@ -265,7 +265,7 @@ async function ensureDatabaseExists() {
         description TEXT,
         disaster_type VARCHAR(50),
         area_id VARCHAR(100),
-        status VARCHAR(20) DEFAULT 'active',
+        status VARCHAR(20) DEFAULT 'unassigned',
         submitted_by INTEGER REFERENCES users(id),
         assigned_to INTEGER REFERENCES users(id),
         idempotency_key VARCHAR(255) UNIQUE,
@@ -277,9 +277,9 @@ async function ensureDatabaseExists() {
       CREATE INDEX IF NOT EXISTS idx_incidents_status_created ON incidents(status, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_incidents_submitted_created ON incidents(submitted_by, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_incidents_assigned_created ON incidents(assigned_to, created_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_incidents_active_unassigned_created
+      CREATE INDEX IF NOT EXISTS idx_incidents_unassigned_created
         ON incidents(created_at DESC)
-        WHERE status = 'active' AND assigned_to IS NULL;
+        WHERE status = 'unassigned';
 
       -- Resources table
       CREATE TABLE IF NOT EXISTS resources (
@@ -1018,8 +1018,8 @@ app.post('/api/incidents', authenticateToken, async (req, res) => {
 
   const point = `POINT(${lon} ${lat})`;
   const result = await pgPool.query(
-    `INSERT INTO incidents (type, location, severity, description, disaster_type, area_id, submitted_by, idempotency_key)
-     VALUES ($1, ST_GeogFromText($2), $3, $4, $5, $6, $7, $8) RETURNING *`,
+    `INSERT INTO incidents (type, location, severity, description, disaster_type, area_id, status, submitted_by, idempotency_key)
+     VALUES ($1, ST_GeogFromText($2), $3, $4, $5, $6, 'unassigned', $7, $8) RETURNING *`,
     [type, point, severity, description, disasterType, areaId, req.user.id, idempotencyKey || null]
   );
   const newIncident = result.rows[0];
@@ -1045,7 +1045,7 @@ app.get('/api/incidents', authenticateToken, async (req, res) => {
     const requestedOffset = parseInt(req.query.offset, 10);
     const status = typeof req.query.status === 'string' ? req.query.status.trim() : '';
 
-    const validStatuses = new Set(['active', 'assigned', 'in-progress', 'resolved']);
+    const validStatuses = new Set(['unassigned', 'active', 'in-progress', 'resolved']);
     const limit = Number.isFinite(requestedLimit)
       ? Math.min(Math.max(requestedLimit, 1), 500)
       : 500;
@@ -1076,7 +1076,7 @@ app.get('/api/incidents', authenticateToken, async (req, res) => {
 
       const userRef = pushParam(userId);
       conditions.push(
-        `(i.status IN ('active', 'in-progress') OR i.assigned_to = ${userRef} OR i.submitted_by = ${userRef})`
+        `(i.status IN ('unassigned', 'active', 'in-progress') OR i.assigned_to = ${userRef} OR i.submitted_by = ${userRef})`
       );
     } else if (userRole !== 'coordinator' && userRole !== 'admin') {
       return res.status(403).json({ error: 'Role not authorized for incident list' });
@@ -1167,7 +1167,7 @@ app.get('/api/incidents/recommended', authenticateToken, authorize('volunteer', 
          assigned_to as "assignedTo",
          ST_Distance(location, ST_GeogFromText($1)) AS distance
        FROM incidents
-       WHERE status = 'active'
+       WHERE status = 'unassigned'
          AND ST_DWithin(location, ST_GeogFromText($1), $2)
        ORDER BY severity DESC, ST_Distance(location, ST_GeogFromText($1)) ASC
        LIMIT 50`,
@@ -1461,6 +1461,11 @@ app.patch('/api/incidents/:id/transition', async (req, res) => {
 
     const fromStatus = current.rows[0].status;
 
+    const validStatuses = new Set(['unassigned', 'active', 'in-progress', 'resolved']);
+    if (!validStatuses.has(newStatus)) {
+      return res.status(400).json({ error: 'Invalid status' });
+    }
+
     await pgPool.query('UPDATE incidents SET status = $1, updated_at = NOW() WHERE id = $2', [newStatus, id]);
 
     // Log history
@@ -1477,7 +1482,7 @@ app.patch('/api/incidents/:id/transition', async (req, res) => {
     if (current.rows[0].source_phone) {
       const ref = current.rows[0].reference_number || id;
       const statusMessages = {
-        'assigned': `Update for ${ref}: A volunteer has been assigned to help you.`,
+        'active': `Update for ${ref}: A volunteer has been assigned to help you.`,
         'in-progress': `Update for ${ref}: Help is on the way to your location.`,
         'resolved': `Update for ${ref}: Your request has been resolved. Stay safe.`,
       };
@@ -1490,7 +1495,7 @@ app.patch('/api/incidents/:id/transition', async (req, res) => {
 
     // Insert system message into chat
     const systemContent = {
-      'assigned': 'A volunteer has been assigned to this incident.',
+      'active': 'A volunteer has been assigned to this incident.',
       'in-progress': 'Help is en route.',
       'resolved': 'This incident has been resolved.',
     };
@@ -2015,9 +2020,12 @@ app.post('/api/incidents/:id/assign', authenticateToken, async (req, res) => {
 
     const prevStatus = current.rows[0].status;
     const prevAssigned = current.rows[0].assigned_to;
-    const newStatus = status || 'assigned';
+    const validStatuses = new Set(['unassigned', 'active', 'in-progress', 'resolved']);
+    const newStatus = status || 'active';
+    if (!validStatuses.has(newStatus)) {
+      return res.status(400).json({ error: 'Invalid status' });
+    }
 
-    // Update incident assignment
     await pgPool.query(
       'UPDATE incidents SET assigned_to = $1, status = $2, updated_at = NOW() WHERE id = $3',
       [volunteerId, newStatus, incidentId]
@@ -2494,7 +2502,7 @@ async function runEscalationCheck() {
     const stale = await pgPool.query(
       `SELECT i.id, i.type, i.severity, i.submitted_by, i.reference_number
        FROM incidents i
-       WHERE i.status = 'active'
+       WHERE i.status = 'unassigned'
          AND i.assigned_to IS NULL
          AND i.created_at < NOW() - INTERVAL '15 minutes'
          AND i.created_at > NOW() - INTERVAL '24 hours'`
@@ -2776,7 +2784,7 @@ app.get('/api/analytics/response-times', authenticateToken, async (req, res) => 
          COUNT(*) as sample_size
        FROM incident_history ih
        JOIN incidents i ON i.id = ih.incident_id
-       WHERE ih.from_status = 'active' AND ih.to_status IN ('in-progress', 'assigned')
+       WHERE ih.from_status = 'active' AND ih.to_status = 'in-progress'
          AND i.created_at > NOW() - INTERVAL '1 hour' * $1`,
       [hours]
     );
@@ -2792,7 +2800,7 @@ app.get('/api/analytics/timeline', authenticateToken, async (req, res) => {
   try {
     const result = await pgPool.query(
       `SELECT date_trunc('hour', created_at) as hour,
-              COUNT(*) FILTER (WHERE status IN ('active','assigned')) as active,
+              COUNT(*) FILTER (WHERE status IN ('active','unassigned')) as active,
               COUNT(*) FILTER (WHERE status = 'in-progress') as in_progress,
               COUNT(*) FILTER (WHERE status = 'resolved') as resolved,
               COUNT(*) as total
@@ -2848,7 +2856,7 @@ app.get('/api/analytics/resource-coverage', authenticateToken, async (req, res) 
 app.get('/api/analytics/health-score', authenticateToken, async (req, res) => {
   try {
     const activeResult = await pgPool.query("SELECT COUNT(*) FROM incidents WHERE status IN ('active','in-progress')");
-    const unassignedResult = await pgPool.query("SELECT COUNT(*) FROM incidents WHERE status = 'active' AND assigned_to IS NULL");
+    const unassignedResult = await pgPool.query("SELECT COUNT(*) FROM incidents WHERE status = 'unassigned'");
     const totalActive = parseInt(activeResult.rows[0].count) || 1;
     const unassigned = parseInt(unassignedResult.rows[0].count);
     const unassigned_rate = unassigned / totalActive;
@@ -2856,7 +2864,7 @@ app.get('/api/analytics/health-score', authenticateToken, async (req, res) => {
     const rtResult = await pgPool.query(
       `SELECT AVG(EXTRACT(EPOCH FROM (ih.changed_at - i.created_at)))/60 as avg_min
        FROM incident_history ih JOIN incidents i ON i.id = ih.incident_id
-       WHERE ih.from_status = 'active' AND ih.to_status IN ('in-progress','assigned')
+       WHERE ih.from_status = 'active' AND ih.to_status = 'in-progress'
          AND i.created_at > NOW() - INTERVAL '24 hours'`
     );
     const avgMin = parseFloat(rtResult.rows[0].avg_min) || 0;

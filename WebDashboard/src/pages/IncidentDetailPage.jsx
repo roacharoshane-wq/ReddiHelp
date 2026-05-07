@@ -8,7 +8,7 @@ import toast from 'react-hot-toast'
 const TYPE_ICONS = { medical: '🏥', fire: '🔥', flood: '🌊', trapped: '⚠️', shelter: '🏠', supplies: '📦', other: '📋' }
 const SEV_LABELS = ['', 'Low', 'Medium', 'High', 'Critical', 'Catastrophic']
 const SEV_COLORS = ['', 'text-green-600', 'text-yellow-600', 'text-orange-600', 'text-red-600', 'text-red-800']
-const STATUS_NEXT = { submitted: 'active', active: 'in-progress', 'in-progress': 'resolved', assigned: 'in-progress' }
+const STATUS_NEXT = { unassigned: 'active', active: 'in-progress', 'in-progress': 'resolved' }
 
 export default function IncidentDetailPage() {
   const { id } = useParams()
@@ -69,9 +69,6 @@ export default function IncidentDetailPage() {
           )}
           <button onClick={() => navigate(`/incidents?assign=${incident.id}`)} className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 dark:border-gray-600 text-xs rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700">
             <UserPlus className="w-3 h-3" />Assign
-          </button>
-          <button onClick={() => transition.mutate('escalated')} className="flex items-center gap-1.5 px-3 py-1.5 border border-red-300 text-red-600 text-xs rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20">
-            <AlertTriangle className="w-3 h-3" />Escalate
           </button>
           {incident.status !== 'resolved' && (
             <button onClick={() => transition.mutate('resolved')} className="flex items-center gap-1.5 px-3 py-1.5 border border-green-300 text-green-600 text-xs rounded-lg hover:bg-green-50 dark:hover:bg-green-900/20 ml-auto">
