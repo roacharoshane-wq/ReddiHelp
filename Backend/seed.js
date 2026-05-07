@@ -867,21 +867,21 @@ async function seedDatabase() {
     console.log('Seeding preparedness content...');
     const guides = [
       { title: 'Hurricane Preparedness Guide',  category: 'hurricane', parish: null, content: `
-## Before the Hurricane
+ Before the Hurricane
 - Stock at least 3 days of water (1 gallon per person per day)
 - Secure loose outdoor items (zinc sheets, furniture, garbage bins)
 - Charge all devices and portable batteries
 - Know your nearest shelter: check ODPEM website or call 116
 - Fill bathtub with water for flushing/cleaning
 
-## During the Hurricane
+ During the Hurricane
 - Stay indoors away from windows and glass doors
 - Move to the strongest room in your home (bathroom, closet)
 - If flooding starts, move to the highest floor
 - Do NOT attempt to drive through flooded roads
 - Listen to JIS (Jamaica Information Service) for updates
 
-## After the Hurricane
+ After the Hurricane
 - Wait for official all-clear before going outside
 - Avoid downed power lines and standing water
 - Check on neighbours, especially elderly and disabled
@@ -889,14 +889,14 @@ async function seedDatabase() {
 - Boil tap water until water supply is confirmed safe` },
 
       { title: 'Earthquake Safety',  category: 'earthquake', parish: null, content: `
-## During an Earthquake
+ During an Earthquake
 - DROP to your hands and knees
 - Take COVER under a sturdy desk or table
 - HOLD ON until the shaking stops
 - If outdoors, move to an open area away from buildings
 - If driving, pull over and stay in vehicle
 
-## After an Earthquake
+ After an Earthquake
 - Check yourself and others for injuries
 - Exit damaged buildings carefully
 - Expect aftershocks — they can be strong
@@ -905,27 +905,27 @@ async function seedDatabase() {
 - Text instead of calling to keep lines clear for emergencies` },
 
       { title: 'Flood Response Guide',  category: 'flood', parish: null, content: `
-## Flood Warning Signs
+ Flood Warning Signs
 - Heavy rainfall lasting more than 2 hours
 - Rivers and gullies rising rapidly
 - Water entering low-lying areas
 - Jamaica Met Service flood warnings
 
-## What to Do
+ What to Do
 - Move to higher ground immediately — do not wait
 - Never walk, swim, or drive through flood waters
 - 6 inches of moving water can knock you down
 - 2 feet of water can float a vehicle
 - Stay off bridges over fast-moving water
 
-## After Flooding
+ After Flooding
 - Return home only when authorities say it is safe
 - Clean and disinfect everything that got wet
 - Throw away food that came in contact with flood water
 - Watch for snakes and insects displaced by flooding` },
 
       { title: 'Emergency Go-Bag Checklist',  category: 'general', parish: null, content: `
-## Essential Items (72-Hour Kit)
+ Essential Items (72-Hour Kit)
 - Water: 1 gallon per person per day (3-day supply)
 - Non-perishable food: canned goods, crackers, dried fruit
 - Manual can opener
@@ -937,7 +937,7 @@ async function seedDatabase() {
 - Phone charger and portable battery bank
 - Whistle (to signal for help)
 
-## Additional Items
+ Additional Items
 - Change of clothes and sturdy shoes
 - Blankets or sleeping bags
 - Toiletries and sanitation supplies
@@ -946,28 +946,28 @@ async function seedDatabase() {
 - Local map (phone GPS may not work)` },
 
       { title: 'Fire Safety at Home',  category: 'fire', parish: null, content: `
-## Prevention
+ Prevention
 - Never leave cooking unattended
 - Keep flammable items away from stove and heat sources
 - Check electrical wiring regularly — frayed wires cause fires
 - Do not overload extension cords or outlets
 - Store kerosene and gas cylinders away from heat
 
-## If a Fire Starts
+ If a Fire Starts
 - GET OUT immediately — do not stop to collect belongings
 - Crawl low under smoke (cleaner air is near the floor)
 - Feel doors before opening — if hot, use another exit
 - Call 110 (Jamaica Fire Brigade) once you are safe
 - Meet at your pre-arranged assembly point
 
-## Escape Planning
+ Escape Planning
 - Know 2 exits from every room
 - Practice fire drills with your household
 - Keep keys near doors (but not visible from outside)
 - If trapped, seal door gaps with wet cloth and signal from window` },
 
       { title: 'Kingston & St Andrew Shelters',  category: 'shelters', parish: 'Kingston', content: `
-## Official Emergency Shelters
+ Official Emergency Shelters
 - National Arena, Independence Park — capacity 3,000
 - National Indoor Sports Centre — capacity 2,000
 - Excelsior High School — capacity 500
@@ -975,7 +975,7 @@ async function seedDatabase() {
 - Holy Trinity Cathedral — capacity 300
 - UWI Mona Assembly Hall — capacity 1,500
 
-## What to Bring to a Shelter
+ What to Bring to a Shelter
 - Your emergency go-bag (see Go-Bag Checklist)
 - Personal medications
 - Bedding (sheet, blanket or sleeping bag)
@@ -985,13 +985,13 @@ async function seedDatabase() {
 Contact ODPEM: 876-906-9674 or dial 116` },
 
       { title: 'St James & Montego Bay Shelters',  category: 'shelters', parish: 'Saint James', content: `
-## Official Emergency Shelters
+ Official Emergency Shelters
 - Montego Bay Convention Centre — capacity 2,500
 - Catherine Hall Primary — capacity 350
 - St James High School — capacity 400
 - Montego Bay Community College — capacity 600
 
-## Coastal Evacuation Routes
+ Coastal Evacuation Routes
 - Follow B15 inland from Montego Bay towards Anchovy
 - Avoid Howard Cooke Boulevard during storm surge
 - Report to nearest shelter if road is impassable
@@ -999,13 +999,13 @@ Contact ODPEM: 876-906-9674 or dial 116` },
 Contact ODPEM Western: 876-952-1838` },
 
       { title: 'Portland Parish Guide',  category: 'flood', parish: 'Portland', content: `
-## Flood-Prone Areas
+ Flood-Prone Areas
 - Port Antonio town centre (near Rio Grande)
 - Hope Bay river basin
 - Buff Bay lowlands
 - Long Bay coastal road
 
-## Key Actions
+ Key Actions
 - Monitor Rio Grande and Swift River water levels
 - Evacuate from river banks when heavy rain persists
 - Use John Crow Mountains high roads as escape routes
@@ -1076,8 +1076,6 @@ Portland is one of Jamaica's wettest parishes — always have a go-bag ready dur
 
     // -- Commit ------------------------------------------------
     await client.query('COMMIT');
-
-    console.log('\n✅ Seeding completed successfully!\n');
     console.log('Summary:');
     console.log(`   Victims:             ${victimIds.length}`);
     console.log(`   Volunteers:          ${volunteerIds.length}`);
