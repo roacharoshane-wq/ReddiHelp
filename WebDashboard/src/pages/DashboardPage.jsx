@@ -38,6 +38,7 @@ export default function DashboardPage() {
 
   const kpis = [
     { key: 'unassigned', label: 'Unassigned', value: incidents.filter(i => i.status === 'unassigned').length, icon: CircleAlert, color: 'text-red-500', bg: 'bg-red-50 dark:bg-red-900/20', filter: (i) => i.status === 'unassigned' },
+    { key: 'active', label: 'Active', value: incidents.filter(i => i.status === 'active').length, icon: Activity, color: 'text-blue-500', bg: 'bg-blue-50 dark:bg-blue-900/20', filter: (i) => i.status === 'active' },
     { key: 'total', label: 'Total Incidents', value: stats?.totalIncidents || 0, icon: Activity, color: 'text-blue-500', bg: 'bg-blue-50 dark:bg-blue-900/20', filter: () => true },
     { key: 'inprogress', label: 'In Progress', value: incidents.filter(i => i.status === 'in-progress').length, icon: Loader, color: 'text-orange-500', bg: 'bg-orange-50 dark:bg-orange-900/20', filter: (i) => i.status === 'in-progress' },
     { key: 'resolved', label: 'Resolved', value: stats?.resolvedIncidents || 0, icon: CheckCircle, color: 'text-teal-500', bg: 'bg-teal-50 dark:bg-teal-900/20', filter: (i) => i.status === 'resolved' },
@@ -50,7 +51,7 @@ export default function DashboardPage() {
     <div className="p-4 sm:p-6 space-y-5 sm:space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-xl sm:text-2xl font-bold">Welcome back, ReddiBoss</h1>
+          <h1 className="text-xl sm:text-2xl font-bold">Welcome back, ReddiAdmin</h1>
           <p className="text-sm text-gray-500 dark:text-gray-400">Here's your operational overview</p>
         </div>
         {health && (

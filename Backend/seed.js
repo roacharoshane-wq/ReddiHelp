@@ -78,6 +78,9 @@ async function ensureSchema(client) {
       unit VARCHAR(20),
       location GEOGRAPHY(POINT),
       organisation_id INTEGER REFERENCES users(id),
+      name VARCHAR(100),
+      organisation_name VARCHAR(100),
+      alert_threshold INTEGER DEFAULT 0,
       status VARCHAR(20) DEFAULT 'available',
       last_updated TIMESTAMPTZ DEFAULT NOW()
     );
@@ -132,15 +135,20 @@ async function ensureSchema(client) {
       from_status VARCHAR(20),
       to_status VARCHAR(20),
       changed_by INTEGER REFERENCES users(id),
+      note TEXT,
       changed_at TIMESTAMPTZ DEFAULT NOW()
     );
 
     -- Broadcast alerts
     CREATE TABLE IF NOT EXISTS broadcast_alerts (
       id SERIAL PRIMARY KEY,
+      title VARCHAR(200),
       message TEXT NOT NULL,
+      severity VARCHAR(20) DEFAULT 'INFO',
       target_roles VARCHAR(50) DEFAULT 'all',
       expires_at TIMESTAMPTZ,
+      recipient_count INTEGER DEFAULT 0,
+      delivery_count INTEGER DEFAULT 0,
       created_by INTEGER REFERENCES users(id),
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
@@ -231,6 +239,63 @@ async function ensureSchema(client) {
       status VARCHAR(20) DEFAULT 'pending',
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
+
+    -- Map layers & presets
+    CREATE TABLE IF NOT EXISTS map_layers (
+      id SERIAL PRIMARY KEY,
+      name VARCHAR(100),
+      type VARCHAR(50),
+      geojson JSONB,
+      created_by INTEGER REFERENCES users(id),
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      active BOOLEAN DEFAULT TRUE
+    );
+    CREATE TABLE IF NOT EXISTS layer_presets (
+      id SERIAL PRIMARY KEY,
+      name VARCHAR(100),
+      user_id INTEGER REFERENCES users(id),
+      layers JSONB,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    -- Resource requests
+    CREATE TABLE IF NOT EXISTS resource_requests (
+      id SERIAL PRIMARY KEY,
+      incident_id INTEGER REFERENCES incidents(id),
+      requested_by INTEGER REFERENCES users(id),
+      resource_type VARCHAR(50) NOT NULL,
+      quantity INTEGER NOT NULL,
+      urgency VARCHAR(20) DEFAULT 'normal',
+      delivery_lat DOUBLE PRECISION,
+      delivery_lon DOUBLE PRECISION,
+      status VARCHAR(20) DEFAULT 'pending',
+      fulfilled_by INTEGER REFERENCES users(id),
+      fulfilled_at TIMESTAMPTZ,
+      notes TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    -- Generated reports
+    CREATE TABLE IF NOT EXISTS generated_reports (
+      id SERIAL PRIMARY KEY,
+      title VARCHAR(200),
+      date_range_start TIMESTAMPTZ,
+      date_range_end TIMESTAMPTZ,
+      generated_by INTEGER REFERENCES users(id),
+      file_path TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    -- Dispatch decisions
+    CREATE TABLE IF NOT EXISTS dispatch_decisions (
+      id SERIAL PRIMARY KEY,
+      incident_id INTEGER REFERENCES incidents(id),
+      volunteer_id INTEGER REFERENCES users(id),
+      confidence INTEGER,
+      decision VARCHAR(20),
+      overridden BOOLEAN DEFAULT FALSE,
+      decided_at TIMESTAMPTZ DEFAULT NOW()
+    );
   `);
 
   // Migration columns (same as server.js ALTER TABLE block)
@@ -254,6 +319,14 @@ async function ensureSchema(client) {
     ALTER TABLE incidents ADD COLUMN IF NOT EXISTS resource_needs JSONB;
     ALTER TABLE incidents DROP CONSTRAINT IF EXISTS check_incident_status;
     ALTER TABLE incidents ADD CONSTRAINT check_incident_status CHECK (status IN ('active', 'resolved', 'in-progress', 'unassigned'));
+    ALTER TABLE resources ADD COLUMN IF NOT EXISTS alert_threshold INTEGER DEFAULT 0;
+    ALTER TABLE resources ADD COLUMN IF NOT EXISTS name VARCHAR(100);
+    ALTER TABLE resources ADD COLUMN IF NOT EXISTS organisation_name VARCHAR(100);
+    ALTER TABLE broadcast_alerts ADD COLUMN IF NOT EXISTS severity VARCHAR(20) DEFAULT 'INFO';
+    ALTER TABLE broadcast_alerts ADD COLUMN IF NOT EXISTS title VARCHAR(200);
+    ALTER TABLE broadcast_alerts ADD COLUMN IF NOT EXISTS recipient_count INTEGER DEFAULT 0;
+    ALTER TABLE broadcast_alerts ADD COLUMN IF NOT EXISTS delivery_count INTEGER DEFAULT 0;
+    ALTER TABLE incident_history ADD COLUMN IF NOT EXISTS note TEXT;
   `);
 
   console.log('Schema ensured');
@@ -671,6 +744,16 @@ async function seedDatabase() {
 
     // -- 8. Incident history -----------------------------------
     console.log('Seeding incident history...');
+    const incidentHistoryNotes = [
+      'Floodwaters have risen above the first-floor windows. Evacuation needed immediately.',
+      'Rescue team en route; traffic delay expected due to collapsed bridge on Old Hope Road.',
+      'Coordinator confirms that the medical kit delivery will arrive in 20 minutes.',
+      'Volunteer reports extra blankets and water are available at the staging area.',
+      'Victim stated that two neighbours are still trapped in the courtyard.',
+      'Responder requested that the shelter be set up for 15 additional people.',
+    ];
+
+    let historyNoteCount = 0;
     for (const incidentId of incidentIds) {
       const { rows } = await client.query(
         'SELECT status, created_at FROM incidents WHERE id = $1',
@@ -691,9 +774,22 @@ async function seedDatabase() {
             [incidentId, rows[0].status, pick(coordinatorIds), new Date(created.getTime() + 90 * 60000)]
           );
         }
+
+        // Add a chat-style note entry for incident history
+        await client.query(
+          `INSERT INTO incident_history (incident_id, changed_by, note, changed_at)
+           VALUES ($1, $2, $3, $4)`,
+          [
+            incidentId,
+            pick([...victimIds, ...volunteerIds, ...responderIds, ...coordinatorIds]),
+            pick(incidentHistoryNotes),
+            new Date(created.getTime() + 120 * 60000),
+          ]
+        );
+        historyNoteCount++;
       }
     }
-    console.log(`   ${incidentIds.length}+ history entries`);
+    console.log(`   ${incidentIds.length} status history entries + ${historyNoteCount} note entries`);
 
     // -- 9. Notifications --------------------------------------
     console.log('Seeding notifications...');
@@ -725,20 +821,20 @@ async function seedDatabase() {
     // -- 10. Broadcast alerts & user_alerts --------------------
     console.log('Seeding broadcast alerts...');
     const broadcastMessages = [
-      { message: '⚠️ HURRICANE WARNING: Category 3 hurricane approaching southern coast. All residents in coastal areas should evacuate immediately to designated shelters.', roles: 'all', hours: 2 },
-      { message: '🏥 MEDICAL SUPPLIES: Emergency medical supplies have arrived at Kingston General Hospital. Volunteers needed for distribution.', roles: 'volunteer,responder', hours: 12 },
-      { message: '🚧 ROAD CLOSURE: A3 highway blocked between Spanish Town and May Pen due to flooding. Use alternate routes via B12.', roles: 'all', hours: 24 },
-      { message: '🆘 URGENT: Shelter at National Arena is at capacity. Directing overflow to UWI Mona campus. Coordinators please update routing.', roles: 'coordinator', hours: 6 },
-      { message: '✅ ALL CLEAR: Flood waters receding in Portland parish. Residents may begin returning home. Exercise caution on roads.', roles: 'all', hours: 48 },
-      { message: '📦 SUPPLY DROP: Water and food packages available at Half Way Tree Transport Centre. Bring ID.', roles: 'all', hours: 8 },
+      { title: 'Hurricane Warning', message: '⚠️ Category 3 hurricane approaching southern coast. Evacuate coastal areas immediately.', severity: 'CRITICAL', roles: 'all', hours: 2 },
+      { title: 'Medical Supply Distribution', message: '🏥 Emergency medical supplies have arrived at Kingston General Hospital. Volunteers needed for distribution.', severity: 'HIGH', roles: 'volunteer,responder', hours: 12 },
+      { title: 'Road Closure Alert', message: '🚧 A3 highway blocked between Spanish Town and May Pen due to flooding. Use alternate routes via B12.', severity: 'MEDIUM', roles: 'all', hours: 24 },
+      { title: 'Shelter Capacity', message: '🆘 Shelter at National Arena is at capacity. Directing overflow to UWI Mona campus. Coordinators please update routing.', severity: 'HIGH', roles: 'coordinator', hours: 6 },
+      { title: 'All Clear Notice', message: '✅ Flood waters receding in Portland parish. Residents may begin returning home. Exercise caution on roads.', severity: 'INFO', roles: 'all', hours: 48 },
+      { title: 'Supply Drop', message: '📦 Water and food packages available at Half Way Tree Transport Centre. Bring ID.', severity: 'INFO', roles: 'all', hours: 8 },
     ];
     const alertIds = [];
     for (const b of broadcastMessages) {
       const { rows } = await client.query(
-        `INSERT INTO broadcast_alerts (message, target_roles, expires_at, created_by, created_at)
-         VALUES ($1, $2, NOW() + INTERVAL '${b.hours} hours', $3, NOW() - INTERVAL '${Math.floor(Math.random() * 3)} hours')
+        `INSERT INTO broadcast_alerts (title, message, severity, target_roles, expires_at, created_by, created_at)
+         VALUES ($1, $2, $3, $4, NOW() + INTERVAL '${b.hours} hours', $5, NOW() - INTERVAL '${Math.floor(Math.random() * 3)} hours')
          RETURNING id`,
-        [b.message, b.roles, pick(coordinatorIds)]
+        [b.title, b.message, b.severity, b.roles, pick(coordinatorIds)]
       );
       alertIds.push(rows[0].id);
     }
@@ -764,6 +860,36 @@ async function seedDatabase() {
       }
     }
     console.log(`   ${ackCount} user_alert deliveries`);
+
+    // -- 11. Resource requests --------------------------------
+    console.log('Seeding resource requests...');
+    const requestTypes = ['water', 'food', 'medical', 'shelter', 'rescue_team'];
+    let requestCount = 0;
+    for (let i = 0; i < 10; i++) {
+      const incidentId = pick(incidentIds);
+      const requestedBy = pick([...victimIds, ...coordinatorIds, ...volunteerIds]);
+      const resourceType = pick(requestTypes);
+      const deliveredAt = Math.random() > 0.5 ? new Date(Date.now() - Math.floor(Math.random() * 48 * 3600000)) : null;
+      await client.query(
+        `INSERT INTO resource_requests (incident_id, requested_by, resource_type, quantity, urgency, delivery_lat, delivery_lon, status, fulfilled_by, fulfilled_at, notes, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW() - INTERVAL '${Math.floor(Math.random() * 72)} hours')`,
+        [
+          incidentId,
+          requestedBy,
+          resourceType,
+          10 + Math.floor(Math.random() * 40),
+          Math.random() > 0.5 ? 'urgent' : 'normal',
+          null,
+          null,
+          deliveredAt ? 'fulfilled' : 'pending',
+          deliveredAt ? pick([...volunteerIds, ...responderIds]) : null,
+          deliveredAt,
+          `Request for ${resourceType} at incident ${incidentId}`,
+        ]
+      );
+      requestCount++;
+    }
+    console.log(`   ${requestCount} resource requests`);
 
     // -- 11. Volunteer stats / gamification --------------------
     console.log('Seeding volunteer stats...');
