@@ -139,6 +139,19 @@ async function ensureSchema(client) {
       changed_at TIMESTAMPTZ DEFAULT NOW()
     );
 
+    -- Incident assignments (supports multiple personnel per incident)
+    CREATE TABLE IF NOT EXISTS incident_assignments (
+      id SERIAL PRIMARY KEY,
+      incident_id INTEGER REFERENCES incidents(id) ON DELETE CASCADE,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      role VARCHAR(50) DEFAULT 'volunteer', -- volunteer, responder, coordinator, etc.
+      assigned_by INTEGER REFERENCES users(id),
+      assigned_at TIMESTAMPTZ DEFAULT NOW(),
+      status VARCHAR(20) DEFAULT 'active', -- active, completed, removed
+      notes TEXT,
+      UNIQUE(incident_id, user_id, status) -- Prevent duplicate active assignments
+    );
+
     -- Broadcast alerts
     CREATE TABLE IF NOT EXISTS broadcast_alerts (
       id SERIAL PRIMARY KEY,
@@ -708,6 +721,34 @@ async function seedDatabase() {
       incidentIds.push(rows[0].id);
     }
     console.log(`   ${incidentIds.length} incidents`);
+
+    // -- 5.5. Incident Assignments -----------------------------
+    console.log('Seeding incident assignments...');
+    for (const incId of incidentIds) {
+      // Get the assigned_to from the incident
+      const incResult = await client.query('SELECT assigned_to, status FROM incidents WHERE id = $1', [incId]);
+      const assignedTo = incResult.rows[0].assigned_to;
+
+      if (assignedTo) {
+        // Create assignment record for the primary assignment
+        await client.query(
+          'INSERT INTO incident_assignments (incident_id, user_id, role, assigned_by, notes) VALUES ($1, $2, $3, $4, $5)',
+          [incId, assignedTo, 'volunteer', pick(coordinatorIds), 'Auto-assigned during seeding']
+        );
+
+        // Sometimes add additional assignments (20% chance)
+        if (Math.random() < 0.2) {
+          const additionalUser = pick([...volunteerIds, ...responderIds].filter(id => id !== assignedTo));
+          if (additionalUser) {
+            await client.query(
+              'INSERT INTO incident_assignments (incident_id, user_id, role, assigned_by, notes) VALUES ($1, $2, $3, $4, $5)',
+              [incId, additionalUser, Math.random() < 0.5 ? 'volunteer' : 'responder', pick(coordinatorIds), 'Additional personnel assigned']
+            );
+          }
+        }
+      }
+    }
+    console.log(`   Incident assignments created`);
 
     // -- 6. Resources ------------------------------------------
     console.log('Seeding resources...');

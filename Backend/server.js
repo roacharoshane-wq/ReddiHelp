@@ -355,6 +355,19 @@ async function ensureDatabaseExists() {
         changed_at TIMESTAMPTZ DEFAULT NOW()
       );
 
+      -- Incident assignments (supports multiple personnel per incident)
+      CREATE TABLE IF NOT EXISTS incident_assignments (
+        id SERIAL PRIMARY KEY,
+        incident_id INTEGER REFERENCES incidents(id) ON DELETE CASCADE,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        role VARCHAR(50) DEFAULT 'volunteer',
+        assigned_by INTEGER REFERENCES users(id),
+        assigned_at TIMESTAMPTZ DEFAULT NOW(),
+        status VARCHAR(20) DEFAULT 'active',
+        notes TEXT,
+        UNIQUE(incident_id, user_id, status)
+      );
+
       -- Broadcast alerts (#13)
       CREATE TABLE IF NOT EXISTS broadcast_alerts (
         id SERIAL PRIMARY KEY,
@@ -1049,6 +1062,14 @@ app.post('/api/incidents', authenticateToken, async (req, res) => {
   );
   const newIncident = result.rows[0];
 
+  // Auto-assign volunteer to new incident
+  try {
+    await autoAssignIncident(newIncident);
+  } catch (assignError) {
+    console.error('Auto-assignment failed:', assignError);
+    // Don't fail the incident creation if assignment fails
+  }
+
   io.to('coordinators').emit('incident:created', newIncident);
 
   if (idempotencyKey) {
@@ -1141,7 +1162,23 @@ app.get('/api/incidents', authenticateToken, async (req, res) => {
          victim.phone as "victimPhone",
          victim.username as "victimName",
          responder.phone as "responderPhone",
-         responder.username as "responderName"
+         responder.username as "responderName",
+         COALESCE(
+           (SELECT json_agg(
+             json_build_object(
+               'id', ia.id,
+               'userId', ia.user_id,
+               'role', ia.role,
+               'assignedAt', ia.assigned_at,
+               'userName', u.name,
+               'userPhone', u.phone
+             )
+           )
+           FROM incident_assignments ia
+           LEFT JOIN users u ON ia.user_id = u.id
+           WHERE ia.incident_id = i.id AND ia.status = 'active'
+           ), '[]'::json
+         ) as assignments
        FROM incidents i
        LEFT JOIN users victim ON i.submitted_by = victim.id
        LEFT JOIN users responder ON i.assigned_to = responder.id
@@ -1913,6 +1950,102 @@ function normalizeParishName(value) {
     .trim();
 }
 
+// Auto-assign incident to best available volunteer
+async function autoAssignIncident(incident) {
+  try {
+    // Check if already has primary assignment
+    const existingAssignments = await pgPool.query(
+      'SELECT COUNT(*) FROM incident_assignments WHERE incident_id = $1 AND status = $2',
+      [incident.id, 'active']
+    );
+
+    if (existingAssignments.rows[0].count > 0) {
+      console.log(`Incident #${incident.id} already has assignments, skipping auto-assignment`);
+      return;
+    }
+
+    // Find best available volunteer within 50km
+    const maxDistance = 50000; // 50km in meters
+    const candidates = await pgPool.query(
+      `SELECT u.id, u.phone, u.name, u.role, u.skills, u.resources, u.vehicle,
+              ST_Distance(u.location, $1) as distance
+       FROM users u
+       WHERE u.role IN ('volunteer', 'responder')
+         AND u.availability = 'available'
+         AND u.last_lat IS NOT NULL
+         AND ST_DWithin(u.location, $1, $2)
+       ORDER BY ST_Distance(u.location, $1) ASC
+       LIMIT 5`,
+      [incident.location, maxDistance]
+    );
+
+    if (candidates.rows.length === 0) {
+      console.log(`No available volunteers found for incident #${incident.id}`);
+      return;
+    }
+
+    // Select the closest volunteer
+    const selectedVolunteer = candidates.rows[0];
+    console.log(`Auto-assigning incident #${incident.id} to volunteer ${selectedVolunteer.name || selectedVolunteer.phone} (${Math.round(selectedVolunteer.distance)}m away)`);
+
+    // Create assignment record
+    await pgPool.query(
+      'INSERT INTO incident_assignments (incident_id, user_id, role, assigned_by, notes) VALUES ($1, $2, $3, $4, $5)',
+      [incident.id, selectedVolunteer.id, 'volunteer', null, `Auto-assigned - ${Math.round(selectedVolunteer.distance)}m away`]
+    );
+
+    // Update incident status to in-progress if it was unassigned
+    if (incident.status === 'active' || incident.status === 'unassigned') {
+      await pgPool.query(
+        'UPDATE incidents SET status = $1, updated_at = NOW() WHERE id = $2',
+        ['in-progress', incident.id]
+      );
+    }
+
+    // Update volunteer availability
+    await pgPool.query(
+      "UPDATE users SET availability = 'on_task' WHERE id = $1",
+      [selectedVolunteer.id]
+    );
+
+    // Log assignment in history
+    await pgPool.query(
+      'INSERT INTO incident_history (incident_id, from_status, to_status, changed_by, note) VALUES ($1, $2, $3, $4, $5)',
+      [incident.id, incident.status, 'in-progress', null, `Auto-assigned to volunteer ${selectedVolunteer.name || selectedVolunteer.phone}`]
+    );
+
+    // Notify the assigned volunteer
+    const notification = {
+      type: 'INCIDENT_ASSIGNED',
+      incidentId: String(incident.id),
+      message: `You have been assigned to incident #${incident.id}: ${incident.type} (${incident.severity} priority)`
+    };
+
+    await pgPool.query(
+      'INSERT INTO notifications (user_id, type, data) VALUES ($1, $2, $3)',
+      [selectedVolunteer.id, notification.type, JSON.stringify(notification)]
+    );
+
+    // Emit real-time notification
+    io.to(`user:${selectedVolunteer.id}`).emit('notification', notification);
+    io.to(`incident:${incident.id}`).emit('incident:updated', {
+      id: incident.id,
+      status: 'in-progress',
+      assignments: [{
+        id: selectedVolunteer.id,
+        name: selectedVolunteer.name,
+        phone: selectedVolunteer.phone,
+        role: 'volunteer',
+        assignedAt: new Date()
+      }]
+    });
+
+  } catch (error) {
+    console.error('Auto-assignment error:', error);
+    throw error;
+  }
+}
+
 app.get('/api/incidents/:id/match', authenticateToken, authorize('coordinator', 'admin'), async (req, res) => {
   const incidentId = parseInt(req.params.id);
   const maxDistance = parseInt(req.query.maxDistance) || 20000; // default 20km
@@ -2111,6 +2244,170 @@ app.post('/api/incidents/:id/assign', authenticateToken, async (req, res) => {
     res.json({ status: 'in-progress', incidentId, volunteerId });
   } catch (err) {
     console.error('❌ Assignment error:', err);
+    res.status(500).json({ error: 'Internal error' });
+  }
+});
+
+// Get all assignments for an incident
+app.get('/api/incidents/:id/assignments', authenticateToken, async (req, res) => {
+  const incidentId = parseInt(req.params.id);
+
+  try {
+    const result = await pgPool.query(
+      `SELECT ia.*, u.name, u.phone, u.role as user_role, u.availability,
+              ab.name as assigned_by_name, ab.phone as assigned_by_phone
+       FROM incident_assignments ia
+       LEFT JOIN users u ON ia.user_id = u.id
+       LEFT JOIN users ab ON ia.assigned_by = ab.id
+       WHERE ia.incident_id = $1 AND ia.status = 'active'
+       ORDER BY ia.assigned_at ASC`,
+      [incidentId]
+    );
+
+    res.json(result.rows);
+  } catch (err) {
+    console.error('❌ Error fetching assignments:', err);
+    res.status(500).json({ error: 'Internal error' });
+  }
+});
+
+// Assign additional personnel to an incident
+app.post('/api/incidents/:id/assignments', authenticateToken, authorize('coordinator', 'admin'), async (req, res) => {
+  const incidentId = parseInt(req.params.id);
+  const { userId, role = 'volunteer', notes } = req.body;
+
+  if (!userId) return res.status(400).json({ error: 'userId required' });
+
+  try {
+    // Check if user is already assigned to this incident
+    const existing = await pgPool.query(
+      'SELECT id FROM incident_assignments WHERE incident_id = $1 AND user_id = $2 AND status = $3',
+      [incidentId, userId, 'active']
+    );
+
+    if (existing.rows.length > 0) {
+      return res.status(400).json({ error: 'User is already assigned to this incident' });
+    }
+
+    // Check if user exists and is available
+    const userCheck = await pgPool.query(
+      'SELECT name, phone, availability FROM users WHERE id = $1',
+      [userId]
+    );
+
+    if (userCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const user = userCheck.rows[0];
+
+    // Create assignment
+    const result = await pgPool.query(
+      'INSERT INTO incident_assignments (incident_id, user_id, role, assigned_by, notes) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+      [incidentId, userId, role, req.user.id, notes]
+    );
+
+    // Update user availability if they were available
+    if (user.availability === 'available') {
+      await pgPool.query(
+        "UPDATE users SET availability = 'on_task' WHERE id = $1",
+        [userId]
+      );
+    }
+
+    // Log in incident history
+    await pgPool.query(
+      'INSERT INTO incident_history (incident_id, from_status, to_status, changed_by, note) VALUES ($1, $2, $3, $4, $5)',
+      [incidentId, null, null, req.user.id, `Assigned ${role}: ${user.name || user.phone}`]
+    );
+
+    // Notify the assigned user
+    const notification = {
+      type: 'INCIDENT_ASSIGNED',
+      incidentId: String(incidentId),
+      message: `You have been assigned to incident #${incidentId} as ${role}`
+    };
+
+    await pgPool.query(
+      'INSERT INTO notifications (user_id, type, data) VALUES ($1, $2, $3)',
+      [userId, notification.type, JSON.stringify(notification)]
+    );
+
+    // Emit real-time updates
+    io.to(`user:${userId}`).emit('notification', notification);
+    io.to(`incident:${incidentId}`).emit('assignment:added', {
+      incidentId,
+      assignment: {
+        id: result.rows[0].id,
+        userId,
+        userName: user.name,
+        userPhone: user.phone,
+        role,
+        assignedAt: result.rows[0].assigned_at
+      }
+    });
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('❌ Assignment creation error:', err);
+    res.status(500).json({ error: 'Internal error' });
+  }
+});
+
+// Remove assignment from an incident
+app.delete('/api/incidents/:id/assignments/:assignmentId', authenticateToken, authorize('coordinator', 'admin'), async (req, res) => {
+  const incidentId = parseInt(req.params.id);
+  const assignmentId = parseInt(req.params.assignmentId);
+
+  try {
+    // Get assignment details
+    const assignment = await pgPool.query(
+      'SELECT user_id FROM incident_assignments WHERE id = $1 AND incident_id = $2 AND status = $3',
+      [assignmentId, incidentId, 'active']
+    );
+
+    if (assignment.rows.length === 0) {
+      return res.status(404).json({ error: 'Assignment not found' });
+    }
+
+    const userId = assignment.rows[0].user_id;
+
+    // Mark assignment as removed
+    await pgPool.query(
+      'UPDATE incident_assignments SET status = $1 WHERE id = $2',
+      ['removed', assignmentId]
+    );
+
+    // Check if user has other active assignments
+    const otherAssignments = await pgPool.query(
+      'SELECT COUNT(*) FROM incident_assignments WHERE user_id = $1 AND status = $2 AND id != $3',
+      [userId, 'active', assignmentId]
+    );
+
+    // If no other assignments, set user as available
+    if (otherAssignments.rows[0].count === 0) {
+      await pgPool.query(
+        "UPDATE users SET availability = 'available' WHERE id = $1",
+        [userId]
+      );
+    }
+
+    // Log in incident history
+    await pgPool.query(
+      'INSERT INTO incident_history (incident_id, from_status, to_status, changed_by, note) VALUES ($1, $2, $3, $4, $5)',
+      [incidentId, null, null, req.user.id, `Removed assignment for user ${userId}`]
+    );
+
+    // Emit real-time update
+    io.to(`incident:${incidentId}`).emit('assignment:removed', {
+      incidentId,
+      assignmentId,
+      userId
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('❌ Assignment removal error:', err);
     res.status(500).json({ error: 'Internal error' });
   }
 });
