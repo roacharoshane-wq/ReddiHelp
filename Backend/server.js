@@ -1170,7 +1170,7 @@ app.get('/api/incidents', authenticateToken, async (req, res) => {
                'userId', ia.user_id,
                'role', ia.role,
                'assignedAt', ia.assigned_at,
-               'userName', u.name,
+               'userName', u.username,
                'userPhone', u.phone
              )
            )
@@ -1967,7 +1967,7 @@ async function autoAssignIncident(incident) {
     // Find best available volunteer within 50km
     const maxDistance = 50000; // 50km in meters
     const candidates = await pgPool.query(
-      `SELECT u.id, u.phone, u.name, u.role, u.skills, u.resources, u.vehicle,
+      `SELECT u.id, u.phone, u.username, u.role, u.skills, u.resources, u.vehicle,
               ST_Distance(u.location, $1) as distance
        FROM users u
        WHERE u.role IN ('volunteer', 'responder')
@@ -1986,7 +1986,7 @@ async function autoAssignIncident(incident) {
 
     // Select the closest volunteer
     const selectedVolunteer = candidates.rows[0];
-    console.log(`Auto-assigning incident #${incident.id} to volunteer ${selectedVolunteer.name || selectedVolunteer.phone} (${Math.round(selectedVolunteer.distance)}m away)`);
+    console.log(`Auto-assigning incident #${incident.id} to volunteer ${selectedVolunteer.username || selectedVolunteer.phone} (${Math.round(selectedVolunteer.distance)}m away)`);
 
     // Create assignment record
     await pgPool.query(
@@ -2011,7 +2011,7 @@ async function autoAssignIncident(incident) {
     // Log assignment in history
     await pgPool.query(
       'INSERT INTO incident_history (incident_id, from_status, to_status, changed_by, note) VALUES ($1, $2, $3, $4, $5)',
-      [incident.id, incident.status, 'in-progress', null, `Auto-assigned to volunteer ${selectedVolunteer.name || selectedVolunteer.phone}`]
+      [incident.id, incident.status, 'in-progress', null, `Auto-assigned to volunteer ${selectedVolunteer.username || selectedVolunteer.phone}`]
     );
 
     // Notify the assigned volunteer
@@ -2033,7 +2033,7 @@ async function autoAssignIncident(incident) {
       status: 'in-progress',
       assignments: [{
         id: selectedVolunteer.id,
-        name: selectedVolunteer.name,
+        name: selectedVolunteer.username,
         phone: selectedVolunteer.phone,
         role: 'volunteer',
         assignedAt: new Date()
@@ -2254,8 +2254,8 @@ app.get('/api/incidents/:id/assignments', authenticateToken, async (req, res) =>
 
   try {
     const result = await pgPool.query(
-      `SELECT ia.*, u.name, u.phone, u.role as user_role, u.availability,
-              ab.name as assigned_by_name, ab.phone as assigned_by_phone
+      `SELECT ia.*, u.username as user_name, u.phone, u.role as user_role, u.availability,
+              ab.username as assigned_by_name, ab.phone as assigned_by_phone
        FROM incident_assignments ia
        LEFT JOIN users u ON ia.user_id = u.id
        LEFT JOIN users ab ON ia.assigned_by = ab.id
