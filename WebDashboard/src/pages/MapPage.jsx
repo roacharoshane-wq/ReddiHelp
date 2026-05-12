@@ -76,6 +76,7 @@ const LEGACY_STYLE_MAP = {
 
 const MAPBOX_STYLE_IDS = new Set(MAPBOX_STYLE_OPTIONS.map((s) => s.id))
 const WARNING_VISIBLE_MS = 4000
+const INCIDENT_PAGE_SIZE = 500
 
 function normalizeMapboxStyle(style) {
   const mapped = LEGACY_STYLE_MAP[style] || style
@@ -84,6 +85,22 @@ function normalizeMapboxStyle(style) {
 
 const SEVERITY_COLORS = ['#22c55e', '#eab308', '#f97316', '#ef4444', '#991b1b']
 const STATUS_COLORS = { unassigned: '#ef4444', active: '#3b82f6', 'in-progress': '#f97316', resolved: '#22c55e', submitted: '#9ca3af' }
+
+async function fetchAllIncidents() {
+  const all = []
+  let offset = 0
+
+  while (true) {
+    // Backend caps results at 500 per request, so page until the last chunk.
+    const page = await api.get(`/incidents?limit=${INCIDENT_PAGE_SIZE}&offset=${offset}`)
+    if (!Array.isArray(page) || page.length === 0) break
+    all.push(...page)
+    if (page.length < INCIDENT_PAGE_SIZE) break
+    offset += page.length
+  }
+
+  return all
+}
 
 export default function MapPage() {
   const user = useAuthStore((s) => s.user)
@@ -110,8 +127,8 @@ export default function MapPage() {
   const normalizedMapStyle = normalizeMapboxStyle(mapStyle)
 
   const { data: incidents = [] } = useQuery({
-    queryKey: ['incidents'],
-    queryFn: () => api.get('/incidents'),
+    queryKey: ['incidents', 'map'],
+    queryFn: fetchAllIncidents,
     refetchInterval: 30000,
   })
 
