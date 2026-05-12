@@ -6,9 +6,11 @@ import { useSocketStore } from '../stores/socketStore'
 import { usePreferencesStore } from '../stores/preferencesStore'
 import { Layers, X, Eye, EyeOff } from 'lucide-react'
 import mapboxgl from 'mapbox-gl'
+import MapboxWorker from 'mapbox-gl/dist/mapbox-gl-csp-worker?worker'
 
 const MAPBOX_TOKEN = (import.meta.env.VITE_MAPBOX_TOKEN || '').trim()
 mapboxgl.accessToken = MAPBOX_TOKEN
+mapboxgl.workerClass = MapboxWorker
 
 const OSM_STYLE = {
   version: 8,
