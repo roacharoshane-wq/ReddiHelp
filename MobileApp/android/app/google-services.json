@@ -1,0 +1,67 @@
+{
+  "project_info": {
+    "project_number": "454357064313",
+    "project_id": "reddihelp",
+    "storage_bucket": "reddihelp.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:454357064313:android:8becaf95bc2fb040c292a8",
+        "android_client_info": {
+          "package_name": "com.example.MobileApp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDk4Avy2GIqOddKBOdq6eL7l3RqAUBvjIs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:454357064313:android:8becaf95bc2fb040c292a8",
+        "android_client_info": {
+          "package_name": "com.example.MobileApp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDk4Avy2GIqOddKBOdq6eL7l3RqAUBvjIs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:454357064313:android:cd9e4928ec90e717c292a8",
+        "android_client_info": {
+          "package_name": "reddi_help.android"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDk4Avy2GIqOddKBOdq6eL7l3RqAUBvjIs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -1,0 +1,47 @@
+{
+  "medical": {
+    "title": "Medical Emergency Guidance",
+    "category": "medical",
+    "snippet": "If someone is unconscious or not breathing, call emergency services now if safe. Apply pressure to heavy bleeding and keep airway clear. Help is being dispatched; reply with any injuries or number of people."
+  },
+  "trapped": {
+    "title": "If You Are Trapped",
+    "category": "trapped",
+    "snippet": "If you are trapped, stay calm and conserve air. Make noise to attract rescuers and avoid risky movements. If possible, send your precise location."
+  },
+  "supplies": {
+    "title": "Supplies Request Guidance",
+    "category": "supplies",
+    "snippet": "Tell us how many people need supplies and any urgent medical needs. Specify types of supplies required (water, food, baby supplies, medication) and accessibility constraints."
+  },
+  "shelter": {
+    "title": "Shelter Guidance",
+    "category": "shelter",
+    "snippet": "If you need shelter, move to the nearest safe shelter if possible. We'll provide shelter details and availability shortly. If injured, call emergency services first."
+  },
+  "fire": {
+    "title": "Fire Safety",
+    "category": "fire",
+    "snippet": "If there is an active fire, evacuate immediately if it is safe to do so. Move to a safe distance and call emergency services. If trapped, indicate your exact position."
+  },
+  "flood": {
+    "title": "Flood Guidance",
+    "category": "flood",
+    "snippet": "Move to higher ground immediately and avoid flood water. Do not drive through flooded roads. If you cannot move safely, describe your location and wait for rescue."
+  },
+  "power_outage": {
+    "title": "Power Outage Safety",
+    "category": "power_outage",
+    "snippet": "Use flashlights instead of candles when possible. If someone depends on electrically powered medical equipment, indicate this now for priority response."
+  },
+  "road_hazard": {
+    "title": "Road & Traffic Incident Guidance",
+    "category": "road_hazard",
+    "snippet": "If anyone is injured, call emergency services. Move to safety off the road if possible and warn other road users. Provide vehicle and injury details when safe."
+  },
+  "other": {
+    "title": "General Guidance",
+    "category": "other",
+    "snippet": "We've logged your report. Please move away from immediate danger and call emergency services if needed. Provide additional details to help responders."
+  }
+}
