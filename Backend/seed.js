@@ -385,6 +385,17 @@ const incidentTemplates = [
   { type: 'other',    severity: 4, description: 'Major road collapse blocking emergency access route',     disasterType: 'earthquake' },
   { type: 'other',    severity: 4, description: 'Large-scale water contamination in community water supply', disasterType: 'flood' },
   { type: 'shelter',  severity: 2, description: 'Temporary shelter overcrowding after evacuation',        disasterType: 'hurricane' },
+  { type: 'medical',  severity: 4, description: 'Dialysis patient needs transport to clinic',             disasterType: 'other'     },
+  { type: 'flood',    severity: 3, description: 'Bridge washed out; residents stranded and need evacuation', disasterType: 'flood'  },
+  { type: 'fire',     severity: 5, description: 'Warehouse fire near fuel depot, rapid response needed',  disasterType: 'fire'      },
+  { type: 'supplies', severity: 3, description: 'Neighborhood without power needs water and batteries',   disasterType: 'hurricane' },
+  { type: 'shelter',  severity: 4, description: 'Evacuation center needs bedding for 60 people',          disasterType: 'hurricane' },
+  { type: 'trapped',  severity: 4, description: 'Two workers trapped in landslide zone',                 disasterType: 'earthquake'},
+  { type: 'medical',  severity: 2, description: 'Elderly patient needs oxygen refill',                   disasterType: 'other'     },
+  { type: 'other',    severity: 3, description: 'Road blocked by fallen trees, access needed for ambulance', disasterType: 'hurricane' },
+  { type: 'flood',    severity: 4, description: 'Gully overflow threatens homes; sandbags requested',     disasterType: 'flood'     },
+  { type: 'medical',  severity: 5, description: 'Severe injuries after building collapse',               disasterType: 'earthquake'},
+  { type: 'supplies', severity: 2, description: 'School shelter short on baby formula and diapers',       disasterType: 'hurricane' },
 ];
 
 const resourceTypes = [
@@ -657,7 +668,7 @@ async function seedDatabase() {
     // -- 5. Incidents ------------------------------------------
     console.log('Seeding incidents...');
     const allResponders = [...volunteerIds, ...responderIds];
-    const statuses = ['unassigned', 'in-progress', 'resolved', 'unassigned', 'unassigned'];
+    const statuses = ['active', 'active', 'active', 'unassigned', 'unassigned', 'in-progress', 'resolved'];
     const incidentIds = [];
 
     // Helper for resource estimation (same as backend)
@@ -999,7 +1010,7 @@ async function seedDatabase() {
     ];
     let msgCount = 0;
     // Create conversation threads for some incidents (light seeding)
-    const chatIncidents = incidentIds.slice(0, 4);
+    const chatIncidents = pickSome(incidentIds, 8, 12);
     const templatesByRole = {
       victim: chatTemplates.filter(t => t.from === 'victim'),
       volunteer: chatTemplates.filter(t => t.from === 'volunteer'),
@@ -1007,10 +1018,11 @@ async function seedDatabase() {
       coordinator: chatTemplates.filter(t => t.from === 'coordinator'),
     };
     for (const incId of chatIncidents) {
-      const threadLength = 3 + Math.floor(Math.random() * 4); // 3 to 6
+      const threadLength = 4 + Math.floor(Math.random() * 5); // 4 to 8
       const threadTemplates = [
         pick(templatesByRole.victim),
         pick(templatesByRole.coordinator),
+        pick(templatesByRole.responder),
         pick(templatesByRole.volunteer),
       ];
       while (threadTemplates.length < threadLength) {
@@ -1184,6 +1196,62 @@ Contact ODPEM Western: 876-952-1838` },
 - Shelter at Titchfield High (Port Antonio) or Portland Parish Church
 
 Portland is one of Jamaica's wettest parishes — always have a go-bag ready during hurricane season (June–November).` },
+
+  { title: 'Medical Emergency Guidance', category: 'medical', parish: null, content: `
+Immediate Actions
+- Check responsiveness and breathing. If unresponsive and not breathing, begin CPR if trained.
+- Call emergency services immediately (110) and provide your location or reference number.
+- Control heavy bleeding with direct pressure; use a clean cloth or bandage.
+
+If Someone Is Injured
+- Do not move a person with suspected spinal injuries unless there is immediate danger.
+- Keep the person warm and monitor breathing until help arrives.
+
+If You Have Life-Support Equipment
+- Notify responders if someone relies on electrically powered medical equipment (oxygen concentrator, dialysis machine). This may change priority for response.` },
+
+  { title: 'If You Are Trapped', category: 'trapped', parish: null, content: `
+Stay Calm & Conserve Air
+- Breathe slowly and stay low if there is dust or smoke.
+- Do not attempt risky movements that could cause collapse.
+
+Attract Rescuers
+- Make noise, tap pipes or walls, use a whistle or phone flashlight to signal your position.
+- If you can, text or call emergency services with precise location details.
+
+Safety
+- Avoid creating fire or using open flames. Wait for trained rescuers to extract you safely.` },
+
+  { title: 'Supplies Request Guidance', category: 'supplies', parish: null, content: `
+What To Report
+- Tell us how many people need supplies and any urgent medical needs.
+- Specify the types of supplies required (water, food, baby supplies, medication).
+
+Delivery & Pickup
+- If picking up supplies, bring ID and a clearly marked container. If receiving delivery, confirm a safe drop-off point.
+- If you are unable to leave, indicate accessibility constraints (stairs, blocked road) so volunteers can plan accordingly.` },
+
+  { title: 'Power Outage Safety', category: 'power_outage', parish: null, content: `
+Immediate Steps
+- Use flashlights instead of candles when possible to reduce fire risk.
+- Turn off and unplug sensitive electronics until power returns.
+
+Medical Devices
+- If someone depends on electrically powered medical equipment, report this immediately for priority assistance.
+
+Food & Heat
+- Keep refrigerator/freezer doors closed to preserve food. Use alternate heating/cooking sources only outdoors or in well-ventilated areas.` },
+
+  { title: 'Road & Traffic Incident Guidance', category: 'road_hazard', parish: null, content: `
+If There Are Injuries
+- Call emergency services for any injuries and provide your exact location.
+
+Make Yourself Safe
+- Move to a safe location away from traffic if possible; use hazard lights and warning triangles if available.
+- Do not stand in active traffic lanes.
+
+Report Details
+- Share vehicle descriptions, number of people involved, and any visible hazards (fuel leak, downed power lines).` },
     ];
     let guideCount = 0;
     for (let i = 0; i < guides.length; i++) {
@@ -1232,7 +1300,7 @@ Portland is one of Jamaica's wettest parishes — always have a go-bag ready dur
     const smsMessages = [
       { raw: 'HELP MEDICAL 14 Palm Street Kingston 2 people',    type: 'medical_emergency', location: '14 Palm Street Kingston',     people: 2 },
       { raw: 'TRAPPED old warehouse by the harbour Port Royal',   type: 'trapped',           location: 'old warehouse Port Royal',    people: 1 },
-      { raw: 'SUPPLIES need water and food St Andrew 5 people',   type: 'need_supplies',     location: 'St Andrew',                   people: 5 },
+      { raw: 'SUPPLIES need water and food St Andrew 5 people',   type: 'supplies',          location: 'St Andrew',                   people: 5 },
       { raw: 'SHELTER 8 people need shelter in Portmore',         type: 'shelter',            location: 'Portmore',                    people: 8 },
       { raw: 'MEDICAL elderly man collapsed at Half Way Tree',    type: 'medical_emergency', location: 'Half Way Tree',               people: 1 },
     ];

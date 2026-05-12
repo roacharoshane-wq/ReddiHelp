@@ -643,6 +643,49 @@ function authorize(...roles) {
 }
 
 // ============================================================
+// Broadcast role helpers
+// ============================================================
+const BROADCAST_ROLE_ROOMS = {
+  volunteer: 'volunteers',
+  responder: 'responders',
+  coordinator: 'coordinators',
+  victim: 'victims',
+  admin: 'admins',
+};
+
+function normalizeBroadcastRole(role) {
+  if (!role) return null;
+  const value = String(role).trim().toLowerCase();
+  if (!value) return null;
+  if (value === 'all') return 'all';
+  const singular = value.endsWith('s') ? value.slice(0, -1) : value;
+  const allowed = new Set([
+    'victim',
+    'volunteer',
+    'responder',
+    'coordinator',
+    'admin',
+  ]);
+  return allowed.has(singular) ? singular : null;
+}
+
+function getBroadcastRoom(role) {
+  if (!role || role === 'all') return null;
+  return BROADCAST_ROLE_ROOMS[role] || null;
+}
+
+function getAllowedBroadcastRoles(userRole) {
+  const normalized = normalizeBroadcastRole(userRole);
+  const roles = new Set(['all']);
+  if (!normalized) return Array.from(roles);
+
+  roles.add(normalized);
+  roles.add(`${normalized}s`);
+
+  return Array.from(roles);
+}
+
+// ============================================================
 // Health Check
 // ============================================================
 app.get('/api/health', (req, res) => {
@@ -1072,6 +1115,52 @@ app.post('/api/incidents', authenticateToken, async (req, res) => {
 
   io.to('coordinators').emit('incident:created', newIncident);
 
+  // --- Insert immediate preparedness instruction as a system message ---
+  try {
+    const prepRes = await pgPool.query(
+      'SELECT id, title, content FROM preparedness_content WHERE category = $1 AND published = true ORDER BY sort_order LIMIT 1',
+      [type]
+    );
+    let snippet = null;
+    let guideId = null;
+    if (prepRes.rows.length > 0) {
+      guideId = prepRes.rows[0].id;
+      const content = prepRes.rows[0].content || '';
+      snippet = (content.split(/\n\s*\n/)[0] || '').trim().slice(0, 400);
+    } else {
+      const fallback = await pgPool.query(
+        'SELECT id, title, content FROM preparedness_content WHERE category = $1 AND published = true ORDER BY sort_order LIMIT 1',
+        ['general']
+      );
+      if (fallback.rows.length > 0) {
+        guideId = fallback.rows[0].id;
+        snippet = (fallback.rows[0].content || '').split(/\n\s*\n/)[0].trim().slice(0, 400);
+      }
+    }
+
+    if (snippet) {
+      const messageContent = `${snippet}\n\nRead full guidance: /api/preparedness/${guideId}`;
+      const ins = await pgPool.query(
+        `INSERT INTO messages (incident_id, sender_id, content, message_type, delivered, read, created_at)
+         VALUES ($1, $2, $3, $4, FALSE, FALSE, NOW()) RETURNING *`,
+        [newIncident.id, null, messageContent, 'system']
+      );
+      const systemMessage = ins.rows[0];
+      io.to(`incident:${newIncident.id}`).emit('chat:message', systemMessage);
+
+      // SMS fallback for incidents created via SMS
+      if (newIncident.source === 'sms' && newIncident.source_phone) {
+        try {
+          await sendSMS(newIncident.source_phone, snippet);
+        } catch (smsErr) {
+          console.error('SMS fallback error:', smsErr.message || smsErr);
+        }
+      }
+    }
+  } catch (prepErr) {
+    console.error('Error creating preparedness system message:', prepErr.message || prepErr);
+  }
+
   if (idempotencyKey) {
     await pgPool.query(
       'INSERT INTO processed_requests (idempotency_key, response) VALUES ($1, $2) ON CONFLICT DO NOTHING',
@@ -1399,12 +1488,12 @@ app.post('/api/sms/incoming', async (req, res) => {
 
   // Parse: HELP TYPE LOCATION [N people]
   const match = text.match(
-    /^(HELP|SOS)\s*(MEDICAL|TRAPPED|SUPPLIES|SHELTER|FIRE|FLOOD)?\s*(.*?)(?:\s+(\d+)\s*(?:people|persons|ppl))?$/i
+    /^(HELP|SOS)\s*(MEDICAL|TRAPPED|SUPPLIES|SHELTER|FIRE|FLOOD|POWER|POWER_OUTAGE)?\s*(.*?)(?:\s+(\d+)\s*(?:people|persons|ppl))?$/i
   );
 
   if (!match) {
     // Send structured prompt back via SMS
-    await sendSMS(phone, 'To report an emergency, text: HELP [TYPE] [LOCATION] [N people]\nTypes: MEDICAL, TRAPPED, SUPPLIES, SHELTER, FIRE, FLOOD\nExample: HELP MEDICAL 14 Palm Street 3 people');
+    await sendSMS(phone, 'To report an emergency, text: HELP [TYPE] [LOCATION] [N people]\nTypes: MEDICAL, TRAPPED, FIRE, FLOOD, POWER\nExample: HELP MEDICAL 14 Palm Street 3 people');
     return res.json({ status: 'prompt_sent' });
   }
 
@@ -1463,6 +1552,8 @@ function estimateIncidentResources(incident) {
     trapped: { water: 5, food: 2, medical: 2, shelter: 1, rescue_team: 2 },
     supplies: { water: 5, food: 20, medical: 1, shelter: 1, rescue_team: 0 },
     shelter: { water: 10, food: 10, medical: 1, shelter: 5, rescue_team: 0 },
+    power_outage: { water: 5, food: 5, medical: 1, shelter: 1, rescue_team: 0 },
+    power: { water: 5, food: 5, medical: 1, shelter: 1, rescue_team: 0 },
     other: { water: 5, food: 5, medical: 1, shelter: 1, rescue_team: 0 },
   };
   const type = (incident.type || 'other').toLowerCase();
@@ -1781,10 +1872,11 @@ app.patch('/api/users/:id/availability', async (req, res) => {
 // ============================================================
 // Broadcast Alerts (#13)
 // ============================================================
-app.post('/api/broadcasts', async (req, res) => {
+app.post('/api/broadcasts', authenticateToken, async (req, res) => {
   const { message, targetRoles, expiresInHours } = req.body;
   if (!message) return res.status(400).json({ error: 'message required' });
 
+  const targetRole = normalizeBroadcastRole(targetRoles) || 'all';
   const expiresAt = expiresInHours
     ? new Date(Date.now() + expiresInHours * 60 * 60 * 1000).toISOString()
     : null;
@@ -1792,12 +1884,12 @@ app.post('/api/broadcasts', async (req, res) => {
   const result = await pgPool.query(
     `INSERT INTO broadcast_alerts (message, target_roles, expires_at, created_by)
      VALUES ($1, $2, $3, $4) RETURNING *`,
-    [message, targetRoles || 'all', expiresAt, req.user.id]
+    [message, targetRole, expiresAt, req.user.id]
   );
   const alert = result.rows[0];
 
   // Fan out via WebSocket
-  const targetRoom = targetRoles === 'volunteers' ? 'volunteers' : null;
+  const targetRoom = getBroadcastRoom(targetRole);
   if (targetRoom) {
     io.to(targetRoom).emit('broadcast:alert', alert);
   } else {
@@ -1807,16 +1899,19 @@ app.post('/api/broadcasts', async (req, res) => {
   res.status(201).json(alert);
 });
 
-app.get('/api/broadcasts', async (req, res) => {
+app.get('/api/broadcasts', authenticateToken, async (req, res) => {
+  const allowedRoles = getAllowedBroadcastRoles(req.user.role);
   const result = await pgPool.query(
     `SELECT * FROM broadcast_alerts
      WHERE (expires_at IS NULL OR expires_at > NOW())
-     ORDER BY created_at DESC LIMIT 50`
+       AND COALESCE(target_roles, 'all') = ANY($1)
+     ORDER BY created_at DESC LIMIT 50`,
+    [allowedRoles]
   );
   res.json(result.rows);
 });
 
-app.post('/api/broadcasts/:id/acknowledge', async (req, res) => {
+app.post('/api/broadcasts/:id/acknowledge', authenticateToken, async (req, res) => {
   const alertId = parseInt(req.params.id);
   const userId = req.user.id;
   await pgPool.query(
@@ -1949,198 +2044,270 @@ function normalizeParishName(value) {
     .replace(/\s+/g, ' ')
     .trim();
 }
+// NEW: computeMatchCandidates - returns scored candidate list
+async function computeMatchCandidates(incidentOrId, maxDistance = 20000, limit = 20) {
+  // Resolve incident (accepts id or incident object)
+  let inc;
+  if (typeof incidentOrId === 'number' || typeof incidentOrId === 'string') {
+    const id = parseInt(incidentOrId, 10);
+    const r = await pgPool.query(
+      'SELECT *, ST_X(location::geometry) as lon, ST_Y(location::geometry) as lat FROM incidents WHERE id = $1',
+      [id]
+    );
+    if (r.rows.length === 0) return { incidentId: id, incidentType: null, resourceNeeds: null, candidates: [] };
+    inc = r.rows[0];
+  } else {
+    inc = incidentOrId;
+    if (inc && (inc.lon == null || inc.lat == null) && inc.id) {
+      const r = await pgPool.query(
+        'SELECT *, ST_X(location::geometry) as lon, ST_Y(location::geometry) as lat FROM incidents WHERE id = $1',
+        [inc.id]
+      );
+      if (r.rows.length > 0) inc = r.rows[0];
+    }
+    if (!inc) return { incidentId: null, incidentType: null, resourceNeeds: null, candidates: [] };
+  }
 
-// Auto-assign incident to best available volunteer
+  const incidentParish = normalizeParishName(inc.area_id);
+  const incType = inc.type;
+
+  // Skill mapping: incident type -> relevant skills
+  const skillMap = {
+    medical: ['First Aid/CPR', 'Medical Professional', 'Basic Life Support', 'Emergency Medicine'],
+    fire: ['Firefighting', 'Hazmat', 'Search & Rescue'],
+    flood: ['Swift Water Rescue', 'Flood Response', 'Heavy Equipment'],
+    trapped: ['Search & Rescue', 'Heavy Equipment', 'Structural Assessment'],
+    supplies: ['Logistics', 'Supply Chain', 'Transport'],
+    shelter: ['Logistics', 'Mental Health', 'Crisis Counseling'],
+  };
+
+  const resourceMap = {
+    medical: ['First Aid Kits', 'Trauma Kits', 'Hand Sanitizer', 'Dust Masks / Respirators', 'Flashlights', 'Batteries'],
+    fire: ['Fire Extinguishers', 'Heavy-Duty Work Gloves', 'Reflective Safety Vests', 'Tarpaulins', 'Flashlights', 'Batteries'],
+    flood: ['Potable Water', 'Non-Perishable Food Packs', 'Blankets', 'Water Purification Tablets', 'Ropes', 'Tarpaulins'],
+    trapped: ['Trauma Kits', 'Heavy-Duty Work Gloves', 'Multi-Tools / Swiss Army Knives', 'Ropes', 'Flashlights'],
+    supplies: ['Potable Water', 'Non-Perishable Food Packs', 'Blankets', 'Hand Sanitizer', 'Portable Power Banks'],
+    shelter: ['Blankets', 'Sleeping Bags', 'Tarpaulins', 'Portable Power Banks', 'Hand Sanitizer'],
+    other: ['First Aid Kits', 'Flashlights', 'Batteries', 'Hand Sanitizer'],
+  };
+
+  const relevantSkills = skillMap[incType] || [];
+  const relevantResources = resourceMap[incType] || resourceMap.other;
+
+  // Resource needs (use stored or estimate)
+  let resourceNeeds = inc.resource_needs;
+  if (!resourceNeeds) {
+    resourceNeeds = estimateIncidentResources(inc);
+  }
+
+  const point = `POINT(${inc.lon} ${inc.lat})`;
+
+  const candidatesRes = await pgPool.query(
+    `SELECT u.id, u.phone, u.username, u.role, u.skills, u.resources, u.vehicle, u.availability,
+            u.active_location_name,
+            u.last_lat, u.last_lon,
+            ST_Distance(u.location, ST_GeogFromText($1)) as distance
+     FROM users u
+     WHERE u.role IN ('volunteer', 'responder')
+       AND u.availability = 'available'
+       AND u.last_lat IS NOT NULL
+       AND ST_DWithin(u.location, ST_GeogFromText($1), $2)
+     ORDER BY distance ASC
+     LIMIT $3`,
+    [point, maxDistance, limit]
+  );
+
+  const scored = candidatesRes.rows.map(c => {
+    // Normalize user skills
+    const userSkills = Array.isArray(c.skills)
+      ? c.skills.map(s => (typeof s === 'string' ? s : (s.name || s.skill || JSON.stringify(s))))
+      : [];
+
+    const skillMatch = relevantSkills.filter(s =>
+      userSkills.some(us => String(us).toLowerCase().includes(s.toLowerCase()))
+    ).length;
+
+    // Parish boost
+    const candidateParish = normalizeParishName(c.active_location_name);
+    const parishBoost = incidentParish && candidateParish && incidentParish === candidateParish ? 300 : 0;
+
+    // Distance score [0..1]
+    const distScore = 1 - Math.min(c.distance || maxDistance, maxDistance) / maxDistance;
+
+    // Normalize user resources robustly
+    let userResources = [];
+    if (Array.isArray(c.resources)) {
+      userResources = c.resources.map(r => {
+        if (typeof r === 'string') return r.toLowerCase();
+        if (r && typeof r === 'object') {
+          if (r.item) return String(r.item).toLowerCase();
+          if (r.type) return String(r.type).toLowerCase();
+          return JSON.stringify(r).toLowerCase();
+        }
+        return String(r).toLowerCase();
+      });
+    }
+
+    const matchedResources = relevantResources.filter(r => userResources.includes(r.toLowerCase()));
+    const resourceMatchScore = relevantResources.length > 0 ? Math.min(matchedResources.length / relevantResources.length, 1) : 0;
+
+    const totalScore = distScore * 0.7 + resourceMatchScore * 0.3;
+
+    return {
+      userId: c.id,
+      phone: c.phone,
+      username: c.username,
+      role: c.role,
+      skills: c.skills,
+      resources: c.resources,
+      vehicle: c.vehicle,
+      activeLocationName: c.active_location_name,
+      distance: Math.round(c.distance || 0),
+      skillMatch,
+      resourceMatchScore,
+      matchedResources,
+      parishMatch: parishBoost > 0,
+      score: Math.round(totalScore * 1000) + skillMatch * 150 + parishBoost,
+    };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+
+  return { incidentId: inc.id, incidentType: inc.type, resourceNeeds, candidates: scored };
+}
+
+// REWORKED: autoAssignIncident now uses computeMatchCandidates and a DB transaction with FOR UPDATE
 async function autoAssignIncident(incident) {
   try {
-    // Check if already has primary assignment
+    // Quick check for existing active assignments outside tx
     const existingAssignments = await pgPool.query(
       'SELECT COUNT(*) FROM incident_assignments WHERE incident_id = $1 AND status = $2',
       [incident.id, 'active']
     );
-
     if (existingAssignments.rows[0].count > 0) {
       console.log(`Incident #${incident.id} already has assignments, skipping auto-assignment`);
       return;
     }
 
-    // Find best available volunteer within 50km
-    const maxDistance = 50000; // 50km in meters
-    const candidates = await pgPool.query(
-      `SELECT u.id, u.phone, u.username, u.role, u.skills, u.resources, u.vehicle,
-              ST_Distance(u.location, $1) as distance
-       FROM users u
-       WHERE u.role IN ('volunteer', 'responder')
-         AND u.availability = 'available'
-         AND u.last_lat IS NOT NULL
-         AND ST_DWithin(u.location, $1, $2)
-       ORDER BY ST_Distance(u.location, $1) ASC
-       LIMIT 5`,
-      [incident.location, maxDistance]
-    );
-
-    if (candidates.rows.length === 0) {
+    // Find candidates (50km, keep top 5)
+    const matchResult = await computeMatchCandidates(incident, 50000, 5);
+    if (!matchResult.candidates || matchResult.candidates.length === 0) {
       console.log(`No available volunteers found for incident #${incident.id}`);
       return;
     }
 
-    // Select the closest volunteer
-    const selectedVolunteer = candidates.rows[0];
-    console.log(`Auto-assigning incident #${incident.id} to volunteer ${selectedVolunteer.username || selectedVolunteer.phone} (${Math.round(selectedVolunteer.distance)}m away)`);
+    const selected = matchResult.candidates[0];
 
-    // Create assignment record
-    await pgPool.query(
-      'INSERT INTO incident_assignments (incident_id, user_id, role, assigned_by, notes) VALUES ($1, $2, $3, $4, $5)',
-      [incident.id, selectedVolunteer.id, 'volunteer', null, `Auto-assigned - ${Math.round(selectedVolunteer.distance)}m away`]
-    );
+    const client = await pgPool.connect();
+    try {
+      await client.query('BEGIN');
 
-    // Update incident status to in-progress if it was unassigned
-    if (incident.status === 'active' || incident.status === 'unassigned') {
-      await pgPool.query(
-        'UPDATE incidents SET status = $1, updated_at = NOW() WHERE id = $2',
-        ['in-progress', incident.id]
+      // Lock the incident row to avoid concurrent assignment races
+      const incRes = await client.query(
+        'SELECT * FROM incidents WHERE id = $1 FOR UPDATE',
+        [incident.id]
       );
+      if (incRes.rows.length === 0) {
+        await client.query('ROLLBACK');
+        console.log(`Incident #${incident.id} not found during auto-assignment`);
+        return;
+      }
+      const lockedIncident = incRes.rows[0];
+
+      // Re-check assignments/assigned_to under lock
+      const existing = await client.query(
+        'SELECT COUNT(*) FROM incident_assignments WHERE incident_id = $1 AND status = $2',
+        [incident.id, 'active']
+      );
+      if (existing.rows[0].count > 0 || lockedIncident.assigned_to) {
+        await client.query('ROLLBACK');
+        console.log(`Incident #${incident.id} was assigned concurrently, aborting auto-assignment`);
+        return;
+      }
+
+      // Lock the user row and ensure still available
+      const userLock = await client.query(
+        'SELECT availability FROM users WHERE id = $1 FOR UPDATE',
+        [selected.userId]
+      );
+      if (userLock.rows.length === 0 || userLock.rows[0].availability !== 'available') {
+        await client.query('ROLLBACK');
+        console.log(`Selected volunteer ${selected.userId} no longer available for incident #${incident.id}`);
+        return;
+      }
+
+      // Create assignment record
+      await client.query(
+        'INSERT INTO incident_assignments (incident_id, user_id, role, assigned_by, notes) VALUES ($1, $2, $3, $4, $5)',
+        [incident.id, selected.userId, 'volunteer', null, `Auto-assigned - ${Math.round(selected.distance)}m away`]
+      );
+
+      // Update incident assigned_to and status
+      await client.query(
+        'UPDATE incidents SET assigned_to = $1, status = $2, updated_at = NOW() WHERE id = $3',
+        [selected.userId, 'in-progress', incident.id]
+      );
+
+      // Update user availability
+      await client.query(
+        "UPDATE users SET availability = 'on_task' WHERE id = $1",
+        [selected.userId]
+      );
+
+      // Log assignment history
+      await client.query(
+        'INSERT INTO incident_history (incident_id, from_status, to_status, changed_by, note) VALUES ($1, $2, $3, $4, $5)',
+        [incident.id, lockedIncident.status, 'in-progress', null, `Auto-assigned to volunteer ${selected.userId}`]
+      );
+
+      // Create in-app notification
+      const notification = {
+        type: 'INCIDENT_ASSIGNED',
+        incidentId: String(incident.id),
+        message: `You have been assigned to incident #${incident.id}: ${lockedIncident.type || ''}`
+      };
+      await client.query(
+        'INSERT INTO notifications (user_id, type, data) VALUES ($1, $2, $3)',
+        [selected.userId, notification.type, JSON.stringify(notification)]
+      );
+
+      await client.query('COMMIT');
+
+      // Emit real-time updates outside transaction
+      io.to(`user:${selected.userId}`).emit('notification', notification);
+      io.to(`incident:${incident.id}`).emit('incident:updated', {
+        id: incident.id,
+        status: 'in-progress',
+        assignedTo: selected.userId,
+      });
+      io.to('coordinators').emit('incident:updated', {
+        id: incident.id,
+        status: 'in-progress',
+        assignedTo: selected.userId,
+      });
+      console.log(`Auto-assigned incident #${incident.id} to user ${selected.userId}`);
+    } catch (txErr) {
+      await client.query('ROLLBACK').catch(() => {});
+      console.error('Auto-assignment transaction error:', txErr);
+      throw txErr;
+    } finally {
+      client.release();
     }
-
-    // Update volunteer availability
-    await pgPool.query(
-      "UPDATE users SET availability = 'on_task' WHERE id = $1",
-      [selectedVolunteer.id]
-    );
-
-    // Log assignment in history
-    await pgPool.query(
-      'INSERT INTO incident_history (incident_id, from_status, to_status, changed_by, note) VALUES ($1, $2, $3, $4, $5)',
-      [incident.id, incident.status, 'in-progress', null, `Auto-assigned to volunteer ${selectedVolunteer.username || selectedVolunteer.phone}`]
-    );
-
-    // Notify the assigned volunteer
-    const notification = {
-      type: 'INCIDENT_ASSIGNED',
-      incidentId: String(incident.id),
-      message: `You have been assigned to incident #${incident.id}: ${incident.type} (${incident.severity} priority)`
-    };
-
-    await pgPool.query(
-      'INSERT INTO notifications (user_id, type, data) VALUES ($1, $2, $3)',
-      [selectedVolunteer.id, notification.type, JSON.stringify(notification)]
-    );
-
-    // Emit real-time notification
-    io.to(`user:${selectedVolunteer.id}`).emit('notification', notification);
-    io.to(`incident:${incident.id}`).emit('incident:updated', {
-      id: incident.id,
-      status: 'in-progress',
-      assignments: [{
-        id: selectedVolunteer.id,
-        name: selectedVolunteer.username,
-        phone: selectedVolunteer.phone,
-        role: 'volunteer',
-        assignedAt: new Date()
-      }]
-    });
-
   } catch (error) {
     console.error('Auto-assignment error:', error);
     throw error;
   }
 }
 
+// UPDATED: use computeMatchCandidates in the GET /api/incidents/:id/match endpoint
 app.get('/api/incidents/:id/match', authenticateToken, authorize('coordinator', 'admin'), async (req, res) => {
   const incidentId = parseInt(req.params.id);
   const maxDistance = parseInt(req.query.maxDistance) || 20000; // default 20km
+  const limit = parseInt(req.query.limit) || 20;
 
   try {
-    const incident = await pgPool.query(
-      'SELECT *, ST_X(location::geometry) as lon, ST_Y(location::geometry) as lat FROM incidents WHERE id = $1',
-      [incidentId]
-    );
-    if (incident.rows.length === 0) return res.status(404).json({ error: 'Incident not found' });
-
-    const inc = incident.rows[0];
-    const incidentParish = normalizeParishName(inc.area_id);
-    const incType = inc.type;
-    
-
-    // Skill mapping: incident type → relevant skills
-    const skillMap = {
-      medical: ['First Aid/CPR', 'Medical Professional', 'Basic Life Support', 'Emergency Medicine'],
-      fire: ['Firefighting', 'Hazmat', 'Search & Rescue'],
-      flood: ['Swift Water Rescue', 'Flood Response', 'Heavy Equipment'],
-      trapped: ['Search & Rescue', 'Heavy Equipment', 'Structural Assessment'],
-      supplies: ['Logistics', 'Supply Chain', 'Transport'],
-      shelter: ['Logistics', 'Mental Health', 'Crisis Counseling'],
-    };
-
-    const relevantSkills = skillMap[incType] || [];
-    const resourceMap = {
-      medical: ['First Aid Kits', 'Trauma Kits', 'Hand Sanitizer', 'Dust Masks / Respirators', 'Flashlights', 'Batteries'],
-      fire: ['Fire Extinguishers', 'Heavy-Duty Work Gloves', 'Reflective Safety Vests', 'Tarpaulins', 'Flashlights', 'Batteries'],
-      flood: ['Potable Water', 'Non-Perishable Food Packs', 'Blankets', 'Water Purification Tablets', 'Ropes', 'Tarpaulins'],
-      trapped: ['Trauma Kits', 'Heavy-Duty Work Gloves', 'Multi-Tools / Swiss Army Knives', 'Ropes', 'Flashlights'],
-      supplies: ['Potable Water', 'Non-Perishable Food Packs', 'Blankets', 'Hand Sanitizer', 'Portable Power Banks'],
-      shelter: ['Blankets', 'Sleeping Bags', 'Tarpaulins', 'Portable Power Banks', 'Hand Sanitizer'],
-      other: ['First Aid Kits', 'Flashlights', 'Batteries', 'Hand Sanitizer'],
-    };
-    const relevantResources = resourceMap[incType] || resourceMap.other;
-
-    // Get estimated resource needs for this incident
-    let resourceNeeds = inc.resource_needs;
-    if (!resourceNeeds) {
-      resourceNeeds = estimateIncidentResources(inc);
-    }
-
-    // Find available volunteers/responders within range, ordered by skill match + distance
-    const candidates = await pgPool.query(
-      `SELECT u.id, u.phone, u.role, u.skills, u.resources, u.vehicle, u.availability,
-              u.active_location_name,
-              u.last_lat, u.last_lon,
-              ST_Distance(u.location, ST_GeogFromText($1)) as distance
-       FROM users u
-       WHERE u.role IN ('volunteer', 'responder')
-         AND u.availability = 'available'
-         AND u.last_lat IS NOT NULL
-         AND ST_DWithin(u.location, ST_GeogFromText($1), $2)
-       ORDER BY distance ASC
-       LIMIT 20`,
-      [`POINT(${inc.lon} ${inc.lat})`, maxDistance]
-    );
-
-    const scored = candidates.rows.map(c => {
-      const userSkills = c.skills || [];
-      const skillMatch = relevantSkills.filter(s =>
-        userSkills.some(us => us.toLowerCase().includes(s.toLowerCase()))
-      ).length;
-
-      const candidateParish = normalizeParishName(c.active_location_name);
-      const parishBoost = incidentParish && candidateParish && incidentParish === candidateParish ? 300 : 0;
-
-      const distScore = 1 - Math.min(c.distance, maxDistance) / maxDistance;
-      const userResources = Array.isArray(c.resources) ? c.resources.map(r => String(r.item).toLowerCase()) : [];
-      const matchedResources = relevantResources.filter(r => userResources.includes(r.toLowerCase()));
-      const resourceMatchScore = relevantResources.length > 0 ? Math.min(matchedResources.length / relevantResources.length, 1) : 0;
-      const totalScore = distScore * 0.7 + resourceMatchScore * 0.3;
-
-      return {
-        userId: c.id,
-        phone: c.phone,
-        role: c.role,
-        skills: c.skills,
-        resources: c.resources,
-        vehicle: c.vehicle,
-        activeLocationName: c.active_location_name,
-        distance: Math.round(c.distance),
-        skillMatch,
-        resourceMatchScore,
-        matchedResources,
-        parishMatch: parishBoost > 0,
-        score: Math.round(totalScore * 1000) + skillMatch * 150 + parishBoost,
-      };
-    });
-
-    scored.sort((a, b) => b.score - a.score);
-
-    res.json({ incidentId, incidentType: incType, resourceNeeds, candidates: scored });
+    const result = await computeMatchCandidates(incidentId, maxDistance, limit);
+    res.json(result);
   } catch (err) {
     console.error('❌ Matching engine error:', err);
     res.status(500).json({ error: 'Internal error' });
@@ -2752,6 +2919,7 @@ app.post('/api/broadcasts/geographic', authenticateToken, authorize('coordinator
 
   try {
     // Create broadcast record
+    const targetRole = normalizeBroadcastRole(targetRoles) || 'all';
     const expiresAt = expiresInHours
       ? new Date(Date.now() + expiresInHours * 60 * 60 * 1000).toISOString()
       : null;
@@ -2759,7 +2927,7 @@ app.post('/api/broadcasts/geographic', authenticateToken, authorize('coordinator
     const alert = await pgPool.query(
       `INSERT INTO broadcast_alerts (message, target_roles, expires_at, created_by)
        VALUES ($1, $2, $3, $4) RETURNING *`,
-      [message, targetRoles || 'all', expiresAt, req.user.id]
+      [message, targetRole, expiresAt, req.user.id]
     );
 
     let affectedUsers = [];
@@ -2770,25 +2938,29 @@ app.post('/api/broadcasts/geographic', authenticateToken, authorize('coordinator
       const firstPoint = `${polygon[0][1]} ${polygon[0][0]}`;
       const wkt = `POLYGON((${polyPoints},${firstPoint}))`;
 
-      const roleFilter = targetRoles && targetRoles !== 'all'
-        ? `AND u.role = '${targetRoles.replace(/'/g, '')}'`
-        : '';
+      const roleFilter = targetRole !== 'all' ? 'AND u.role = $2' : '';
+      const params = targetRole !== 'all' ? [wkt, targetRole] : [wkt];
 
       const users = await pgPool.query(
         `SELECT u.id, u.phone, u.role FROM users u
          WHERE u.location IS NOT NULL AND ST_Within(u.location::geometry, ST_GeomFromText($1, 4326))
          ${roleFilter}`,
-        [wkt]
+        params
       );
 
       affectedUsers = users.rows;
     } else {
       // No polygon — broadcast to all users with matching role
-      const roleFilter = targetRoles && targetRoles !== 'all'
-        ? `WHERE role = '${targetRoles.replace(/'/g, '')}'`
-        : '';
-      const users = await pgPool.query(`SELECT id, phone, role FROM users ${roleFilter}`);
-      affectedUsers = users.rows;
+      if (targetRole !== 'all') {
+        const users = await pgPool.query(
+          'SELECT id, phone, role FROM users WHERE role = $1',
+          [targetRole]
+        );
+        affectedUsers = users.rows;
+      } else {
+        const users = await pgPool.query('SELECT id, phone, role FROM users');
+        affectedUsers = users.rows;
+      }
     }
 
     // Send notifications to each affected user
@@ -2801,7 +2973,12 @@ app.post('/api/broadcasts/geographic', authenticateToken, authorize('coordinator
     }
 
     // Fan out via Socket.io
-    io.emit('broadcast:alert', alert.rows[0]);
+    const targetRoom = getBroadcastRoom(targetRole);
+    if (targetRoom) {
+      io.to(targetRoom).emit('broadcast:alert', alert.rows[0]);
+    } else {
+      io.emit('broadcast:alert', alert.rows[0]);
+    }
 
     console.log(`📢 [Geographic Broadcast] Alert #${alert.rows[0].id} sent to ${affectedUsers.length} user(s)`);
     res.status(201).json({
@@ -2919,9 +3096,9 @@ io.use((socket, next) => {
 
 io.on('connection', (socket) => {
   const user = socket.user;
-  if (user.role === 'coordinator') socket.join('coordinators');
-  if (user.role === 'volunteer') socket.join('volunteers');
-  if (user.role === 'responder') socket.join('responders');
+  const normalizedRole = normalizeBroadcastRole(user.role);
+  const roleRoom = getBroadcastRoom(normalizedRole);
+  if (roleRoom) socket.join(roleRoom);
   console.log(`🔌 User ${user.id} (${user.role}) connected via WebSocket`);
 
   socket.on('subscribe:incident', (incidentId) => {
