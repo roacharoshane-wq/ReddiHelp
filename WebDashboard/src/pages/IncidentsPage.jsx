@@ -251,7 +251,7 @@ function ExpandedRow({ incident, onAssign, onNavigate }) {
           <p className="text-xs font-medium text-gray-500 mb-1">Description</p>
           <p className="text-sm">{incident.description || 'No description'}</p>
           <p className="text-xs text-gray-500 mt-2">People affected: {incident.peopleAffected || 'Unknown'}</p>
-          <p className="text-xs text-gray-500">Ref: {incident.reference_number || `INC-${incident.id}`}</p>
+          <p className="text-xs text-gray-500">Ref: {incident.referenceNumber || incident.reference_number || `INC-${incident.id}`}</p>
         </div>
         <div>
           <p className="text-xs font-medium text-gray-500 mb-1">Timeline</p>

@@ -981,6 +981,10 @@ app.post('/api/sync', authenticateToken, async (req, res) => {
       // --- Action handlers ---
       if (resource === 'incident' && action === 'CREATE') {
         const { type, lat, lon, severity, description, disasterType, areaId } = data;
+        const rawPeopleAffected = data.peopleAffected ?? data.people_affected;
+        const rawReferenceNumber = data.referenceNumber ?? data.reference_number;
+        const peopleAffected = Number.isFinite(Number(rawPeopleAffected)) ? Number(rawPeopleAffected) : null;
+        const referenceNumber = rawReferenceNumber ? String(rawReferenceNumber).trim() : null;
 
         if (!type || lat == null || lon == null || !severity) {
           results.push({
@@ -994,10 +998,31 @@ app.post('/api/sync', authenticateToken, async (req, res) => {
         const point = `POINT(${lon} ${lat})`;
         const insertResult = await pgPool.query(
           `INSERT INTO incidents
-             (type, location, severity, description, disaster_type, area_id, submitted_by, status, idempotency_key)
-           VALUES ($1, ST_GeogFromText($2), $3, $4, $5, $6, $7, 'active', $8)
-           RETURNING id, type, status, created_at`,
-          [type, point, severity, description || null, disasterType || null, areaId || null, req.user.id, idempotencyKey || null]
+             (type, location, severity, description, disaster_type, area_id, submitted_by, status, idempotency_key, people_affected, reference_number)
+           VALUES ($1, ST_GeogFromText($2), $3, $4, $5, $6, $7, 'active', $8, $9, $10)
+           RETURNING *,
+             ST_X(location::geometry) as lon,
+             ST_Y(location::geometry) as lat,
+             COALESCE(disaster_type, 'other') as "disasterType",
+             COALESCE(area_id, 'unknown') as "areaId",
+             created_at as "timestamp",
+             updated_at as "lastUpdated",
+             people_affected as "peopleAffected",
+             reference_number as "referenceNumber",
+             submitted_by as "submittedBy",
+             assigned_to as "assignedTo"`,
+          [
+            type,
+            point,
+            severity,
+            description || null,
+            disasterType || null,
+            areaId || null,
+            req.user.id,
+            idempotencyKey || null,
+            peopleAffected,
+            referenceNumber,
+          ]
         );
 
         responsePayload = insertResult.rows[0];
@@ -1072,6 +1097,10 @@ app.post('/api/sync', authenticateToken, async (req, res) => {
 // ============================================================
 app.post('/api/incidents', authenticateToken, async (req, res) => {
   const { type, lat, lon, severity, description, disasterType, areaId, idempotencyKey } = req.body;
+  const rawPeopleAffected = req.body.peopleAffected ?? req.body.people_affected;
+  const rawReferenceNumber = req.body.referenceNumber ?? req.body.reference_number;
+  const peopleAffected = Number.isFinite(Number(rawPeopleAffected)) ? Number(rawPeopleAffected) : null;
+  const referenceNumber = rawReferenceNumber ? String(rawReferenceNumber).trim() : null;
 
   if (!type || lat == null || lon == null || !severity) {
     return res.status(400).json({ error: 'Missing required fields: type, lat, lon, severity' });
@@ -1090,8 +1119,20 @@ app.post('/api/incidents', authenticateToken, async (req, res) => {
 
   const point = `POINT(${lon} ${lat})`;
   const result = await pgPool.query(
-    `INSERT INTO incidents (type, location, severity, description, disaster_type, area_id, submitted_by, source_phone, idempotency_key)
-     VALUES ($1, ST_GeogFromText($2), $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+    `INSERT INTO incidents (type, location, severity, description, disaster_type, area_id, submitted_by, source_phone, idempotency_key, people_affected, reference_number)
+     VALUES ($1, ST_GeogFromText($2), $3, $4, $5, $6, $7, $8, $9, $10, $11)
+     RETURNING *,
+       ST_X(location::geometry) as lon,
+       ST_Y(location::geometry) as lat,
+       COALESCE(disaster_type, 'other') as "disasterType",
+       COALESCE(area_id, 'unknown') as "areaId",
+       created_at as "timestamp",
+       updated_at as "lastUpdated",
+       people_affected as "peopleAffected",
+       reference_number as "referenceNumber",
+       submitted_by as "submittedBy",
+       assigned_to as "assignedTo",
+       source_phone as "sourcePhone"`,
     [
       type,
       point,
@@ -1102,6 +1143,8 @@ app.post('/api/incidents', authenticateToken, async (req, res) => {
       req.user.id,
       req.user.phone || null,
       idempotencyKey || null,
+      peopleAffected,
+      referenceNumber,
     ]
   );
   const newIncident = result.rows[0];
@@ -1247,6 +1290,8 @@ app.get('/api/incidents', authenticateToken, async (req, res) => {
          i.status,
          i.created_at as "timestamp",
          i.updated_at as "lastUpdated",
+         i.people_affected as "peopleAffected",
+         i.reference_number as "referenceNumber",
          i.submitted_by as "submittedBy",
          i.assigned_to as "assignedTo",
          victim.phone as "victimPhone",
@@ -1356,7 +1401,50 @@ app.get('/api/incidents/heatmap', async (req, res) => {
 
 app.get('/api/incidents/:id', async (req, res) => {
   const id = parseInt(req.params.id);
-  const incident = await pgPool.query('SELECT * FROM incidents WHERE id = $1', [id]);
+  const incident = await pgPool.query(
+    `SELECT
+       i.id,
+       i.type,
+       ST_X(i.location::geometry) as lon,
+       ST_Y(i.location::geometry) as lat,
+       COALESCE(i.severity, 1) as severity,
+       i.description,
+       COALESCE(i.disaster_type, 'other') as "disasterType",
+       COALESCE(i.area_id, 'unknown') as "areaId",
+       i.status,
+       i.created_at as "timestamp",
+       i.updated_at as "lastUpdated",
+       i.people_affected as "peopleAffected",
+       i.reference_number as "referenceNumber",
+       i.submitted_by as "submittedBy",
+       i.assigned_to as "assignedTo",
+       i.source_phone as "sourcePhone",
+       victim.phone as "victimPhone",
+       victim.username as "victimName",
+       responder.phone as "responderPhone",
+       responder.username as "responderName",
+       COALESCE(
+         (SELECT json_agg(
+           json_build_object(
+             'id', ia.id,
+             'userId', ia.user_id,
+             'role', ia.role,
+             'assignedAt', ia.assigned_at,
+             'userName', u.username,
+             'userPhone', u.phone
+           )
+         )
+         FROM incident_assignments ia
+         LEFT JOIN users u ON ia.user_id = u.id
+         WHERE ia.incident_id = i.id AND ia.status = 'active'
+         ), '[]'::json
+       ) as assignments
+     FROM incidents i
+     LEFT JOIN users victim ON i.submitted_by = victim.id
+     LEFT JOIN users responder ON i.assigned_to = responder.id
+     WHERE i.id = $1`,
+    [id]
+  );
   if (incident.rows.length === 0) return res.status(404).json({ error: 'Not found' });
   res.json(incident.rows[0]);
 });

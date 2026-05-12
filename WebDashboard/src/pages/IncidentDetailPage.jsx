@@ -42,6 +42,9 @@ export default function IncidentDetailPage() {
   if (!incident) return <div className="p-8 text-center text-gray-500">Incident not found</div>
 
   const nextStatus = STATUS_NEXT[incident.status]
+  const reportedAt = incident.timestamp || incident.created_at
+  const reportedDate = reportedAt ? new Date(reportedAt) : null
+  const reportedLabel = reportedDate && !Number.isNaN(reportedDate.getTime()) ? reportedDate.toLocaleString() : 'Unknown time'
 
   return (
     <div className="h-full flex flex-col">
@@ -53,10 +56,10 @@ export default function IncidentDetailPage() {
           <div className="flex-1">
             <div className="flex items-baseline gap-2">
               <h1 className="text-lg font-bold">Incident #{incident.id}</h1>
-              <span className="text-xs px-2 py-0.5 bg-gray-100 dark:bg-gray-700 rounded">{incident.reference_number || `INC-${incident.id}`}</span>
+              <span className="text-xs px-2 py-0.5 bg-gray-100 dark:bg-gray-700 rounded">{incident.referenceNumber || incident.reference_number || `INC-${incident.id}`}</span>
               <span className={`text-xs font-semibold ${SEV_COLORS[incident.severity]}`}>{SEV_LABELS[incident.severity]} Severity</span>
             </div>
-            <p className="text-sm text-gray-500">{incident.type} • {new Date(incident.timestamp).toLocaleString()}</p>
+            <p className="text-sm text-gray-500">{incident.type} • {reportedLabel}</p>
           </div>
         </div>
 
@@ -92,7 +95,7 @@ export default function IncidentDetailPage() {
             <div className="grid grid-cols-2 gap-3 text-sm">
               <div className="flex items-center gap-2"><MapPin className="w-3.5 h-3.5 text-gray-400" /><span>{incident.areaId || `${incident.lat?.toFixed(5)}, ${incident.lon?.toFixed(5)}`}</span></div>
               <div className="flex items-center gap-2"><Users className="w-3.5 h-3.5 text-gray-400" /><span>{incident.peopleAffected || '?'} people affected</span></div>
-              <div className="flex items-center gap-2"><Clock className="w-3.5 h-3.5 text-gray-400" /><span>Reported {new Date(incident.timestamp).toLocaleString()}</span></div>
+              <div className="flex items-center gap-2"><Clock className="w-3.5 h-3.5 text-gray-400" /><span>Reported {reportedLabel}</span></div>
               <div className="flex items-center gap-2"><FileText className="w-3.5 h-3.5 text-gray-400" /><span>Status: <strong>{incident.status}</strong></span></div>
             </div>
             {incident.assignedTo && (
