@@ -21,7 +21,7 @@ async function ensureDatabaseExists() {
   const maintenanceUrl = new URL(databaseUrl);
   maintenanceUrl.pathname = '/postgres';
 
-  const adminPool = new Pool({ connectionString: maintenanceUrl.toString() });
+  const adminPool = new Pool({ connectionString: maintenanceUrl.toString(), ssl:{rejectUnauthorized:false} });
   try {
     const { rowCount } = await adminPool.query(
       'SELECT 1 FROM pg_database WHERE datname = $1',
@@ -536,7 +536,7 @@ function generatePhone() {
 // ============================================================
 
 async function seedDatabase() {
-  const pool = new Pool({ connectionString: databaseUrl });
+  const pool = new Pool({ connectionString: databaseUrl, ssl:{rejectUnauthorized:false} });
   const client = await pool.connect();
 
   try {

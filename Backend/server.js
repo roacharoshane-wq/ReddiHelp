@@ -482,6 +482,7 @@ async function ensureDatabaseExists() {
       ALTER TABLE incidents ADD COLUMN IF NOT EXISTS reference_number VARCHAR(50);
       ALTER TABLE incidents ADD COLUMN IF NOT EXISTS source_phone VARCHAR(20);
       ALTER TABLE incidents DROP CONSTRAINT IF EXISTS check_incident_status;
+      UPDATE incidents SET status = 'active' WHERE status NOT IN ('active', 'resolved', 'in-progress', 'unassigned');
       ALTER TABLE incidents ADD CONSTRAINT check_incident_status CHECK (status IN ('active', 'resolved', 'in-progress', 'unassigned'));
     `);
 
