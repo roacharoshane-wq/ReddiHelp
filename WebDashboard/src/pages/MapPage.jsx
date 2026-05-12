@@ -87,6 +87,64 @@ function normalizeMapboxStyle(style) {
 
 const SEVERITY_COLORS = ['#22c55e', '#eab308', '#f97316', '#ef4444', '#991b1b']
 const STATUS_COLORS = { unassigned: '#ef4444', active: '#3b82f6', 'in-progress': '#f97316', resolved: '#22c55e', submitted: '#9ca3af' }
+const INCIDENT_ICON_FONT = 'Material Icons'
+const INCIDENT_ICON_SIZE = 48
+const INCIDENT_ICON_FONT_SIZE = 28
+const INCIDENT_ICON_GLYPHS = {
+  medical: 'local_hospital',
+  fire: 'local_fire_department',
+  flood: 'water_drop',
+  trapped: 'emergency',
+  other: 'warning',
+}
+const INCIDENT_ICON_FALLBACKS = {
+  medical: 'H',
+  fire: 'F',
+  flood: 'W',
+  trapped: '!',
+  other: '!',
+}
+
+const loadIncidentIconFont = async () => {
+  if (typeof document === 'undefined' || !document.fonts?.load) return false
+  try {
+    await document.fonts.load(`${INCIDENT_ICON_FONT_SIZE}px "${INCIDENT_ICON_FONT}"`)
+    await document.fonts.ready
+    return true
+  } catch {
+    return false
+  }
+}
+
+const renderIncidentIcon = (glyph, fallback, useFont) => {
+  const canvas = document.createElement('canvas')
+  canvas.width = INCIDENT_ICON_SIZE
+  canvas.height = INCIDENT_ICON_SIZE
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return null
+  ctx.clearRect(0, 0, INCIDENT_ICON_SIZE, INCIDENT_ICON_SIZE)
+  ctx.fillStyle = '#ffffff'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  const fontFamily = useFont ? `"${INCIDENT_ICON_FONT}"` : 'system-ui'
+  ctx.font = `${INCIDENT_ICON_FONT_SIZE}px ${fontFamily}`
+  const text = useFont ? glyph : fallback
+  ctx.fillText(text, INCIDENT_ICON_SIZE / 2, INCIDENT_ICON_SIZE / 2 + 1)
+  return ctx.getImageData(0, 0, INCIDENT_ICON_SIZE, INCIDENT_ICON_SIZE)
+}
+
+const ensureIncidentIcons = async (map) => {
+  const allPresent = Object.keys(INCIDENT_ICON_GLYPHS).every((key) => map.hasImage(`incident-${key}`))
+  if (allPresent) return
+
+  const fontReady = await loadIncidentIconFont()
+  Object.entries(INCIDENT_ICON_GLYPHS).forEach(([key, glyph]) => {
+    const imageId = `incident-${key}`
+    if (map.hasImage(imageId)) return
+    const imageData = renderIncidentIcon(glyph, INCIDENT_ICON_FALLBACKS[key] || '!', fontReady)
+    if (imageData) map.addImage(imageId, imageData, { pixelRatio: 2 })
+  })
+}
 
 async function fetchAllIncidents() {
   const all = []
@@ -395,7 +453,7 @@ export default function MapPage() {
       map.getCanvas().style.cursor = ''
     }
 
-    const ensureOperationalLayers = () => {
+    const ensureOperationalLayers = async () => {
       if (!map.getSource('incidents')) {
         map.addSource('incidents', { type: 'geojson', data: { type: 'FeatureCollection', features: [] }, cluster: true, clusterMaxZoom: 14, clusterRadius: 50 })
       }
@@ -407,6 +465,22 @@ export default function MapPage() {
       }
       if (!map.getLayer('incident-points')) {
         map.addLayer({ id: 'incident-points', type: 'circle', source: 'incidents', filter: ['!', ['has', 'point_count']], paint: { 'circle-color': ['match', ['get', 'status'], 'active', '#ef4444', 'in-progress', '#f97316', 'resolved', '#22c55e', '#9ca3af'], 'circle-radius': ['interpolate', ['linear'], ['get', 'severity'], 1, 6, 5, 14], 'circle-stroke-width': 2, 'circle-stroke-color': '#fff' } })
+      }
+
+      await ensureIncidentIcons(map)
+      if (!map.getLayer('incident-icons')) {
+        map.addLayer({
+          id: 'incident-icons',
+          type: 'symbol',
+          source: 'incidents',
+          filter: ['!', ['has', 'point_count']],
+          layout: {
+            'icon-image': ['match', ['get', 'type'], 'medical', 'incident-medical', 'fire', 'incident-fire', 'flood', 'incident-flood', 'trapped', 'incident-trapped', 'other', 'incident-other', 'incident-other'],
+            'icon-size': ['interpolate', ['linear'], ['get', 'severity'], 1, 0.55, 5, 0.9],
+            'icon-allow-overlap': true,
+            'icon-ignore-placement': true,
+          },
+        })
       }
       if (!map.getLayer('incident-pulse')) {
         map.addLayer({ id: 'incident-pulse', type: 'circle', source: 'incidents', filter: ['all', ['!', ['has', 'point_count']], ['==', ['get', 'assignedTo'], null], ['==', ['get', 'status'], 'active']], paint: { 'circle-color': '#ef4444', 'circle-radius': ['interpolate', ['linear'], ['get', 'severity'], 1, 10, 5, 22], 'circle-opacity': 0.3 } })
@@ -458,6 +532,8 @@ export default function MapPage() {
 
       map.off('click', 'incident-points', onIncidentClick)
       map.on('click', 'incident-points', onIncidentClick)
+      map.off('click', 'incident-icons', onIncidentClick)
+      map.on('click', 'incident-icons', onIncidentClick)
       map.off('click', 'volunteer-points', onVolunteerClick)
       map.on('click', 'volunteer-points', onVolunteerClick)
       map.off('click', 'incident-clusters', onClusterClick)
@@ -467,6 +543,10 @@ export default function MapPage() {
       map.on('mouseenter', 'incident-points', setPointer)
       map.off('mouseleave', 'incident-points', clearPointer)
       map.on('mouseleave', 'incident-points', clearPointer)
+      map.off('mouseenter', 'incident-icons', setPointer)
+      map.on('mouseenter', 'incident-icons', setPointer)
+      map.off('mouseleave', 'incident-icons', clearPointer)
+      map.on('mouseleave', 'incident-icons', clearPointer)
       map.off('mouseenter', 'volunteer-points', setPointer)
       map.on('mouseenter', 'volunteer-points', setPointer)
       map.off('mouseleave', 'volunteer-points', clearPointer)
@@ -477,11 +557,11 @@ export default function MapPage() {
     setProviderState()
     armStartupTimer()
 
-    map.on('style.load', () => {
+    map.on('style.load', async () => {
       initialStyleReady = true
       clearTimeout(styleStartupTimer)
       setProviderState()
-      ensureOperationalLayers()
+      await ensureOperationalLayers()
       pushIncidentData(map, incidentsRef.current)
       pushVolunteerData(map, volunteersRef.current)
       pushResourceData(map, resourcesRef.current)
@@ -599,7 +679,7 @@ export default function MapPage() {
   }
 
   const layerConfig = [
-    { key: 'incidents', label: 'Incidents', layers: ['incident-points', 'incident-clusters', 'incident-cluster-count', 'incident-pulse'] },
+    { key: 'incidents', label: 'Incidents', layers: ['incident-points', 'incident-icons', 'incident-clusters', 'incident-cluster-count', 'incident-pulse'] },
     { key: 'volunteers', label: 'Volunteers', layers: ['volunteer-points'] },
     { key: 'resources', label: 'Resources', layers: ['resource-points'] },
     { key: 'heatmap', label: 'Heatmap', layers: ['incident-heatmap'] },
